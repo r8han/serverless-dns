@@ -1,4 +1,4 @@
-name = "serverless-dns"
+name = "r8hhanhasabe-pvtt-serverless-dns-gg"
 main = "./dist/worker.js"
 workers_dev = true
 # logpush job is setup to capture from envs ending: log, pro, or one
@@ -7,8 +7,12 @@ logpush = false
 # node_compat = true
 compatibility_date = "2023-03-21"
 send_metrics = false
-minify = false
+# minify = false
 upload_source_maps = true
+
+
+minify = true
+
 
 # uncomment to enable analytics on serverless-dns
 # this binding is not inherited by other worker-envs
