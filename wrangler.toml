@@ -1,4 +1,4 @@
-name = "r8hhanhasabe-pvtt-serverless-dns-gg"
+name = "rohans-dns"
 main = "./dist/worker.js"
 workers_dev = true
 # logpush job is setup to capture from envs ending: log, pro, or one
