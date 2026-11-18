@@ -1,21 +1,25 @@
 {
-  "compilerOptions": {
-    "allowJs": true
-  },
   "importMap": "import_map.json",
-  "nodeModulesDir": "auto",
-  "lock": false,
+  "nodeModulesDir": "manual",
+  "lock": {
+    "path": "./deno.lock",
+    "frozen": true
+  },
   "lint": {
     "files": {
-      "exclude": ["**/**"]
+      "exclude": [
+        "**/**"
+      ]
     }
   },
   "fmt": {
     "files": {
-      "exclude": ["**/**"]
+      "exclude": [
+        "**/**"
+      ]
     }
   },
   "tasks": {
-    "prepare": "./src/build/pre.sh"
+    "prepare": "sh scripts/prepare.sh"
   }
 }

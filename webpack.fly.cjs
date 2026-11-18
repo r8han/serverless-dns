@@ -17,12 +17,6 @@ module.exports = {
     }),
   ],
 
-  /* externalsType: 'module',
-  externals: {
-    '@riaskov/mmap-io': '@riaskov/mmap-io',
-  },*/
-  externals: /@riaskov/,
-
   optimization: {
     usedExports: true,
     minimize: false,

@@ -180,8 +180,8 @@ export class DNSPrefilter {
     try {
       r.data = await this.filterOut(ctx.requestDecodedDnsPacket);
     } catch (e) {
-      r = pres.errResponse("dnsPrefilter", e);
-      this.log.e(ctx.rxid, "main", e);
+      r = pres.errResponse("dnsPrefilter");
+      this.log.e(ctx.rxid, "prefilter failed");
     }
 
     return r;

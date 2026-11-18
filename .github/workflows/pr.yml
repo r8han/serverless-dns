@@ -1,109 +1,55 @@
-name: 📩 PR
-
-on:
-  # "I am a workflow on the main branch's HEAD, target (base) of a PR"
-  pull_request_target:
-    branches:
-      - "main"
-
-# Avoid concurrent runs of this workflow on an incoming PR, cancel previous
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref }}
-  cancel-in-progress: true
-
-env:
-  # Base branch for the PR
-  BASE_REF: ${{ github.base_ref }}
-  BASE_SHA: ${{ github.event.pull_request.base.sha }}
-  BASE_REPO: ${{ github.event.pull_request.base.repo.clone_url }}
-
-  # Branch of PR (maybe of a fork repo)
-  PR_HEAD_REF: ${{ github.head_ref }}
-  PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-  PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.clone_url }}
-
-  # Full ref of base branch like `refs/heads/master`, gh_sha is same as base_sha
-  GH_REF: "${{ github.ref }}"
-  GH_SHA: ${{ github.sha }}
-
+name: PR checks
+on: pull_request
+permissions: { contents: read }
 jobs:
-  lint-fmt:
-    name: Lint & fmt
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: 🚚 Get latest code
-        uses: actions/checkout@v4
-        with:
-          # Checkout base (target) repo
-          ref: ${{ env.GH_REF }}
-
-      - name: 🥑 Install deps
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: '22.22.3' }
+      - run: npm ci --ignore-scripts --omit=optional && npm run lint && npm test
+      - name: Audit full and runner dependency graphs
+        run: npm run audit:dependencies
+  bundles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: { target: [node, bun, deno, worker, fastly] }
+    # No secrets, deploy credentials, shared caches or publishable artifacts.
+    env:
+      BLOCKLIST_VERSION: 2024/1706100000000
+      BLOCKLIST_MANIFEST: ${{ github.workspace }}/fixture/manifest.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with: { node-version: '24.22.3' }
+      - if: matrix.target != 'bun'
+        run: npm ci --ignore-scripts
+      - run: node test/prepare-fixture.mjs fixture && cp fixture/blocklist-metadata.json src/
+      - if: matrix.target == 'node'
+        run: npm run build:fly && node test/listener-smoke.mjs node
+      - if: matrix.target == 'worker'
+        run: npm run build && node test/worker-smoke.mjs && ./node_modules/.bin/wrangler deploy --dry-run --env prod
+      - if: matrix.target == 'fastly'
         run: |
-          npm install
-
-      - name: 🎣 Fetch PR's head
+          npm run build:fastly
+          sh scripts/ci-tool.sh viceroy "$RUNNER_TEMP"
+          node test/fastly-smoke.mjs "$RUNNER_TEMP/viceroy"
+      - if: matrix.target == 'deno'
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with: { deno-version: 2.5.6 }
+      - if: matrix.target == 'deno'
         run: |
-          git fetch origin ${{ env.PR_HEAD_SHA }}
-
-      # Abort if node modules are checked in
-      - name: 🚨 Check for unsafe changes
-        run: |
-          DIFF=$(git diff --name-only --diff-filter=ACMRT \
-            ${{ env.BASE_SHA }}...${{ env.PR_HEAD_SHA }})
-
-          echo "::notice::DIFF(files): ${DIFF//$'\n'/ }"
-
-          if echo $DIFF | grep "node_modules"; then
-            echo "::error::Unsafe change 'node_modules' found"
-            exit 1
-          fi
-
-      - name: 🍌 Checkout PR_HEAD
-        run: |
-          git checkout ${{ env.PR_HEAD_SHA }}
-
-      - name: 🔧 Run eslint on changed files only
-        run: |
-          DIFF=$(git diff --name-only --diff-filter=ACMRT \
-            ${{ env.BASE_SHA }}...${{ env.PR_HEAD_SHA }})
-
-          npx eslint $DIFF --cache --fix
-
-      - name: 👀 Look for lint changes
-        id: lint-changes
-        run: |
-          echo changes=$( \
-            if git diff-index --quiet HEAD --; \
-            then echo "false"; \
-            else echo "true"; \
-            fi) \
-            >> $GITHUB_OUTPUT
-
-      - name: 🏗 Commit lint changes
-        if: steps.lint-changes.outputs.changes == 'true'
-        run: |
-          git config --local user.name 'github-actions[bot]'
-          git config --local user.email 'github-actions[bot]@users.noreply.github.com'
-          git commit --no-verify -am "Automatic lint & fmt"
-
-      - name: 🚢 Push to origin?
-        if: ${{ env.BASE_REPO == env.PR_HEAD_REPO }}
-        run: |
-          git push origin HEAD:$PR_REF
-        env:
-          PR_REF: ${{ env.PR_HEAD_REF }}
-
-      # `GITHUB_TOKEN` owned by `github-actions[bot]` has write access to
-      # origin in this `PR-target` workflow but not the write access to fork
-      # repo.
-      # A "personal access token" of repository maintainer may be required
-      # for pushing to forks.
-      - name: 🚢 Push to fork?
-        if: ${{ env.BASE_REPO != env.PR_HEAD_REPO }}
-        run: |
-          git remote add fork $PR_REPO
-          git push fork HEAD:$PR_REF
-        env:
-          # ref: docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
-          PR_REF: ${{ env.PR_HEAD_REF }}
-          PR_REPO: ${{ env.PR_HEAD_REPO }}
+          deno check --frozen src/server-deno.ts && deno run --frozen test/conformance.mjs
+          node scripts/stage-deno.mjs release
+          DENO_DIR="$RUNNER_TEMP/empty-cache" DENO_APP_DIR=release node test/listener-smoke.mjs deno
+      - if: matrix.target == 'bun'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with: { bun-version: 1.3.3 }
+      - if: matrix.target == 'bun'
+        run: bun install --frozen-lockfile --ignore-scripts --omit optional && bun test/conformance.mjs && bun run build:flybun && node test/listener-smoke.mjs bun

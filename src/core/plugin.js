@@ -6,12 +6,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { checkAlive } from "../commons/cancel.js";
+import { readBounded } from "../commons/bounded.js";
 import * as bufutil from "../commons/bufutil.js";
 import * as dnsutil from "../commons/dnsutil.js";
 import * as envutil from "../commons/envutil.js";
 import * as util from "../commons/util.js";
 import { RResp } from "../plugins/plugin-response.js";
-import * as rdnsutil from "../plugins/rdns-util.js";
 import IOState from "./io-state.js";
 import { log } from "./log.js";
 import { services } from "./svc.js";
@@ -27,11 +28,8 @@ export default class RethinkPlugin {
      */
     this.ctx = new Map();
 
-    const rxid = util.rxidFromHeader(event.request.headers) || util.xid();
+    const rxid = util.xid();
     this.addCtx("rxid", "[rx." + rxid + "]");
-
-    // log-id specific to this request, if missing, no logs will be emitted
-    this.addCtx("lid", extractLid(event.request.url));
 
     // works on fly.io and cloudflare
     this.addCtx("region", getRegion(event.request) || "");
@@ -69,14 +67,21 @@ export default class RethinkPlugin {
     this.registerPlugin(
       "cacheOnlyResolver",
       services.dnsCacheHandler,
-      ["rxid", "userBlocklistInfo", "requestDecodedDnsPacket", "isDnsMsg"],
+      [
+        "rxid",
+        "userBlocklistInfo",
+        "requestDecodedDnsPacket",
+        "isDnsMsg",
+        "userDnsResolverUrl",
+        "signal",
+      ],
       this.dnsCacheCallback
     );
 
     this.registerPlugin(
       "commandControl",
       services.commandControl,
-      ["rxid", "userAuth", "lid", "request", "isDnsMsg"],
+      ["rxid", "userAuth", "signal", "request", "isDnsMsg"],
       this.commandControlCallback
     );
 
@@ -85,6 +90,8 @@ export default class RethinkPlugin {
       services.dnsResolver,
       [
         "rxid",
+        "deadline",
+        "signal",
         "dispatcher",
         "request",
         // resolver-url overriden by user-op
@@ -103,7 +110,7 @@ export default class RethinkPlugin {
       services.logPusher,
       [
         "rxid",
-        "lid",
+        "userAuth",
         "isDnsMsg",
         "dispatcher",
         "request",
@@ -151,6 +158,7 @@ export default class RethinkPlugin {
         continue;
       }
 
+      checkAlive(this.ctx.get("signal"));
       const res = await p.module.exec(makectx(this.ctx, p.pctx));
 
       if (typeof p.callback === "function") {
@@ -169,7 +177,7 @@ export default class RethinkPlugin {
     this.log.d(rxid, "command-control response");
 
     if (!util.emptyObj(r) && r.stopProcessing) {
-      this.log.d(rxid, "command-control reply", r);
+      this.log.d(rxid, "command-control reply");
       io.hResponse(r.httpResponse);
     }
   }
@@ -186,8 +194,12 @@ export default class RethinkPlugin {
     this.log.d(rxid, "user-op response");
 
     if (response.isException) {
-      this.log.w(rxid, "unexpected err userOp", r);
-      this.loadException(rxid, response, io);
+      io.isException = true;
+      io.hResponse(
+        new Response(null, {
+          status: response.exceptionFrom === "UserOp:Policy" ? 400 : 401,
+        })
+      );
     } else if (!util.emptyObj(r)) {
       // will only be null in case of errors
       const a = r.userAuth;
@@ -196,7 +208,7 @@ export default class RethinkPlugin {
       const rr = r.dnsResolverUrl;
       // may be empty string; usually of form "v:base64" or "v-base32"
       const bs = r.userBlocklistFlag;
-      this.log.d(rxid, "set user:auth/blockInfo/resolver/stamp", a, bi, rr, bs);
+
       this.addCtx("userAuth", a);
       this.addCtx("userBlocklistInfo", bi);
       this.addCtx("userBlockstamp", bs);
@@ -218,7 +230,7 @@ export default class RethinkPlugin {
     this.log.d(rxid, "prefilter deny?", deny, "err?", err);
 
     if (err) {
-      this.log.w(rxid, "prefilter: error", r);
+      this.log.w(rxid, "prefilter error");
       this.loadException(rxid, response, io);
     } else if (deny) {
       io.dnsNxDomainResponse(r.flag);
@@ -296,7 +308,7 @@ export default class RethinkPlugin {
    * @param {IOState} io
    */
   loadException(rxid, response, io) {
-    this.log.e(rxid, "exception", JSON.stringify(response));
+    this.log.w(rxid, "plugin failed");
     io.dnsExceptionResponse(response);
   }
 
@@ -317,46 +329,47 @@ export default class RethinkPlugin {
     io.id(rxid, region);
 
     this.addCtx("isDnsMsg", isDnsMsg);
-    // nothing to do if the current request isn't a dns question
-    if (!isDnsMsg) {
-      // throw away any request that is not a dns-msg since cc.js
-      // processes non-dns msgs only via GET, while rest of the
-      // plugins process only dns-msgs via GET and POST.
-      if (!util.isGetRequest(request)) {
-        this.log.i(rxid, "not a dns-msg, not a GET req either", request);
-        io.hResponse(util.respond405());
-        return;
-      }
+    if (
+      !util.isGetRequest(request) &&
+      !(isDnsMsg && util.isPostRequest(request))
+    ) {
+      io.hResponse(util.respond405());
+      return;
     }
-
-    // else: treat doh as if it was a dns-msg iff "dns" query-string is set
-    question = await extractDnsQuestion(request);
-
-    // not a dns request
-    if (bufutil.emptyBuf(question)) return;
-
-    if (isGwReq) io.gatewayAnswersOnly(envutil.gwip4(), envutil.gwip6());
-
     try {
-      const [qpacket, ecsdropped] = dnsutil.dropECS(dnsutil.decode(question));
-      // if ecs was removed, then re-encode the question
-      if (ecsdropped) {
-        question = dnsutil.encode(qpacket);
+      if (util.isPostRequest(request)) {
+        question = await readBounded(
+          request,
+          dnsutil.maxDNSPacketSize,
+          this.ctx.get("signal")
+        );
+      } else {
+        const values = new URL(request.url).searchParams.getAll("dns");
+        if (!isDnsMsg && !values.length) return; // command, not DNS
+        if (
+          values.length !== 1 ||
+          values[0].length > 5462 ||
+          !/^[a-zA-Z0-9_-]+$/.test(values[0])
+        ) {
+          throw new Error("invalid DNS parameter");
+        }
+        question = bufutil.base64ToBytes(values[0]);
       }
-
+      let qpacket = dnsutil.decodeQuery(question);
+      const stripped = dnsutil.stripClientSubnet(question, qpacket);
+      if (question !== stripped) {
+        question = stripped;
+        qpacket = dnsutil.decodeQuery(question);
+      }
+      if (isGwReq) io.gatewayAnswersOnly(envutil.gwip4(), envutil.gwip6());
       io.input(qpacket);
       this.addCtx("isDnsMsg", true);
-      this.log.d(rxid, "cur-ques", JSON.stringify(qpacket.questions));
-
       this.addCtx("requestDecodedDnsPacket", qpacket);
       this.addCtx("requestBodyBuffer", question);
     } catch (e) {
-      // err if question is not a valid dns-packet
-      this.log.d(rxid, "cannot decode dns query; may be cc GET req?");
-      // TODO: io.hResponse(util.respond400()) instead?
-      // at this point: req is GET and has "dns" in its url-string
-      // but: is not a valid dns request
-      return;
+      io.hResponse(
+        new Response(null, { status: e instanceof RangeError ? 413 : 400 })
+      );
     }
   }
 }
@@ -370,32 +383,9 @@ export default class RethinkPlugin {
 function makectx(context, ctxkeys) {
   const out = {};
   for (const key of ctxkeys) {
-    out[key] = context.get(key) || null;
+    out[key] = context.get(key) ?? null;
   }
   return out;
-}
-
-// TODO: fetch lid from config store
-function extractLid(url) {
-  // if lid is not present in url, then return hostname delimited by "_"
-  let lid = util.fromPath(url, rdnsutil.logPrefix);
-
-  if (util.emptyString(lid) && envutil.logpushHostnameAsLogid()) {
-    lid = util.tld(url, 0, "_");
-  }
-
-  return lid || "";
-}
-
-async function extractDnsQuestion(request) {
-  if (util.isPostRequest(request)) {
-    return await request.arrayBuffer();
-  } else {
-    // TODO: okay to assume GET request?
-    const queryString = new URL(request.url).searchParams;
-    const dnsQuery = queryString.get("dns");
-    return bufutil.base64ToBytes(dnsQuery);
-  }
 }
 
 function getRegion(request) {

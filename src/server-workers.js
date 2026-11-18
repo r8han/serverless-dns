@@ -6,6 +6,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { requestTimeout } from "./commons/dnsutil.js";
 import * as util from "./commons/util.js";
 import { handleRequest } from "./core/doh.js";
 import "./core/workers/config.js";
@@ -31,18 +32,16 @@ function serveDoh(request, env, ctx) {
     ctx.passThroughOnException.bind(ctx)
   );
 
-  return new Promise((accept) => {
-    system
-      .when("go")
-      .then((_v) => {
-        return handleRequest(event);
+  const start = Date.now();
+  return system.when("go", 10000).then(
+    () => {
+      event.deadline = start + requestTimeout();
+      return handleRequest(event);
+    },
+    () =>
+      new Response(null, {
+        status: 503,
+        headers: { "cache-control": "private, no-store" },
       })
-      .then((response) => {
-        accept(response);
-      })
-      .catch((e) => {
-        console.error("server", "serveDoh err", e);
-        accept(util.respond405());
-      });
-  });
+  );
 }

@@ -1,197 +1,91 @@
-/*
- * Copyright (c) 2021 RethinkDNS and its authors.
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- */
-
+// SPDX-License-Identifier: MPL-2.0
 import { LfuCache } from "@serverless-dns/lfu-cache";
-import * as bufutil from "../../commons/bufutil.js";
-import * as dnsutil from "../../commons/dnsutil.js";
-import * as envutil from "../../commons/envutil.js";
-import * as util from "../../commons/util.js";
-import { log } from "../../core/log.js";
-import * as cacheutil from "../cache-util.js";
+import * as env from "../../commons/envutil.js";
+import { openResponse } from "../../commons/cancel.js";
+import { readBounded } from "../../commons/bounded.js";
+import { UpstreamAnswer, lifetime, replay } from "../cache-util.js";
 import { CacheApi } from "./cache-api.js";
 
 export class DnsCache {
   constructor(size) {
-    this.log = log.withTags("DnsCache");
-    this.disabled = envutil.disableDnsCache();
-
-    if (this.disabled) {
-      this.log.w("DnsCache disabled");
-      return;
-    }
-
-    this.localcache = new LfuCache("DnsCache", size);
-    this.httpcache = new CacheApi();
+    this.disabled = env.disableDnsCache();
+    this.answers = new LfuCache("answers-v2", size);
+    this.policy = new LfuCache("policy-v2", size);
+    this.http = new CacheApi();
   }
 
-  /**
-   * @param {URL} url
-   * @param {boolean} localOnly
-   * @returns {Promise<cacheutil.DnsCacheData?>}
-   */
-  async get(url, localOnly = false) {
-    if (this.disabled) return null;
+  // Revision-scoped question stamps only; cannot overwrite an answer in
+  // either tier. No request wire bytes or per-user decision are retained.
+  putPolicy(key, stamps) {
+    if (!this.disabled && key && stamps) this.policy.put(key.href, stamps);
+  }
+  getPolicy(key) {
+    return !this.disabled && key ? this.policy.get(key.href) : null;
+  }
 
-    if (!url && util.emptyString(url.href)) {
-      this.log.d("get: empty url", url);
+  putAnswer(key, answer, stamps, dispatcher) {
+    if (this.disabled || !key || !(answer instanceof UpstreamAnswer)) return;
+    const ttl = lifetime(answer.packet);
+    if (!ttl) return;
+    const time = Date.now();
+    const bytes = answer.bytes.slice(0);
+    this.answers.put(key.href, { bytes, time, stamps });
+    const metadata = JSON.stringify({ key: key.href, time, stamps }, (_, x) =>
+      x instanceof Uint16Array ? Array.from(x) : x
+    );
+    if (metadata.length > 8192 || this.http.noop) return;
+    dispatcher(
+      this.http
+        .put(
+          key.href,
+          new Response(bytes, {
+            headers: {
+              "x-sdns-metadata": metadata,
+              "cache-control": `max-age=${ttl}`,
+            },
+          })
+        )
+        .catch(() => {})
+    );
+  }
+
+  async getAnswer(key, query, signal) {
+    if (this.disabled || !key) return null;
+    const local = this.answers.get(key.href);
+    if (local) return replay(local, query);
+    let res;
+    try {
+      res = await openResponse(() => this.http.get(key.href), signal);
+      if (res?.status !== 200) return null;
+      const header = res.headers.get("x-sdns-metadata");
+      if (!header || header.length > 8192) return null;
+      const { key: storedKey, time, stamps } = JSON.parse(header);
+      if (storedKey !== key.href) return null;
+      if (
+        stamps !== false &&
+        (!stamps || typeof stamps !== "object" || Array.isArray(stamps))
+      ) {
+        return null;
+      }
+      for (const [name, flags] of Object.entries(stamps || {})) {
+        if (
+          !Array.isArray(flags) ||
+          flags.length > 17 ||
+          flags.some((v) => !Number.isInteger(v) || v < 0 || v > 65535)
+        ) {
+          return null;
+        }
+        stamps[name] = Uint16Array.from(flags);
+      }
+      const bytes = await readBounded(res, 4096, signal);
+      const entry = { bytes, time, stamps };
+      const hit = replay(entry, query);
+      if (hit) this.answers.put(key.href, entry);
+      return hit;
+    } catch {
       return null;
+    } finally {
+      if (res?.body && !res.bodyUsed) res.body.cancel().catch(() => {});
     }
-
-    // http-cache can be updated by any number of workers
-    // in the region, and could contain latest / full
-    // entry, whereas a local-cache may not.
-    let data = this.fromLocalCache(url.href);
-    if (data) {
-      return data;
-    }
-
-    // fetch only from local-cache
-    if (localOnly) return null;
-
-    // note: http cache api availble only on cloudflare
-    data = await this.fromHttpCache(url);
-    if (data) {
-      // write-through local cache
-      this.putLocalCache(url.href, data);
-    }
-
-    return data;
-  }
-
-  /**
-   * @param {URL} url
-   * @param {cacheutil.DnsCacheData} data
-   * @param {function(function):void} dispatcher
-   * @returns {Promise<void>}
-   */
-  async put(url, data, dispatcher) {
-    if (this.disabled) return;
-
-    if (
-      !url ||
-      util.emptyString(url.href) ||
-      util.emptyObj(data) ||
-      util.emptyObj(data.metadata) ||
-      util.emptyObj(data.dnsPacket) ||
-      bufutil.emptyBuf(data.dnsBuffer)
-    ) {
-      this.log.w("put: empty url/data", url, data);
-      return;
-    }
-
-    try {
-      // data: {dnsPacket, dnsBuffer, metadata}; dnsPacket/Buffer may be null
-      // verbose: this.log.d("put: data in cache", data);
-      this.log.d("put: data in cache", data.metadata);
-
-      // a race where the cache may infact have a fresh answer,
-      // but then we override it with this question-only packet
-      // so: get existing entry first to rule that out
-      const c = this.fromLocalCache(url.href);
-      const hasAns = !util.emptyObj(c) && dnsutil.isAnswer(c.dnsPacket);
-      const incomingHasAns = dnsutil.isAnswer(data.dnsPacket);
-      if (hasAns && !incomingHasAns) {
-        this.log.w("put ignored: cache has answer, incoming does not");
-        return;
-      } // else: override cachedEntry with incoming
-
-      this.putLocalCache(url.href, data);
-
-      dispatcher(this.putHttpCache(url, data));
-    } catch (e) {
-      this.log.e("put", url.href, data, e.stack);
-    }
-  }
-
-  /**
-   * @param {string} href
-   * @param {cacheutil.DnsCacheData} data
-   * @returns {void}
-   */
-  putLocalCache(href, data) {
-    // href "https://caches.rethinkdns.com/2023/1682978161602/0.test.dns0.eu:A"
-    // k "/0.test.dns0.eu:A"
-    const k = href.slice(href.lastIndexOf("/"));
-    const v = cacheutil.makeLocalCacheValue(data);
-
-    if (!k || !v) return;
-
-    this.localcache.put(k, v);
-  }
-
-  /**
-   * @param {string} href
-   * @returns {cacheutil.DnsCacheData|null}
-   */
-  fromLocalCache(href) {
-    const key = href.slice(href.lastIndexOf("/"));
-    if (!key) return false;
-
-    const res = this.localcache.get(key);
-
-    if (util.emptyObj(res)) return null;
-
-    const b = res.dnsBuffer;
-    let p;
-    try {
-      p = dnsutil.decode(b);
-    } catch (e) {
-      this.log.w("malformed dns packet in local cache:", e.message);
-      return null; // return null to indicate cache miss
-    }
-    const m = res.metadata;
-
-    const cr = cacheutil.makeCacheValue(p, b, m);
-
-    return cacheutil.isValueValid(cr) ? cr : null;
-  }
-
-  /**
-   * @param {URL} url
-   * @param {cacheutil.DnsCacheData} data
-   * @returns {Promise<any|void>}
-   */
-  async putHttpCache(url, data) {
-    const k = url.href;
-    const v = cacheutil.makeHttpCacheValue(data);
-
-    if (!k || !v) return;
-
-    return this.httpcache.put(k, v);
-  }
-
-  /**
-   * @param {URL} url
-   * @returns {Promise<cacheutil.DnsCacheData|null>}
-   */
-  async fromHttpCache(url) {
-    const k = url.href;
-    const response = await this.httpcache.get(k);
-    if (!response || !response.ok) return null;
-
-    const metadata = cacheutil.extractMetadata(response);
-    this.log.d("http-cache response metadata", metadata);
-
-    // 'b' shouldn't be null; but a dns question or a dns answer
-    const b = await response.arrayBuffer();
-    // when 'b' is less than dns-packet header-size, decode errs out
-    let p;
-    try {
-      p = dnsutil.decode(b);
-    } catch (e) {
-      this.log.w("malformed dns packet in http cache:", e.message);
-      return null; // return null to indicate cache miss
-    }
-    // though 'm' is never empty
-    const m = metadata;
-
-    const cr = cacheutil.makeCacheValue(p, b, m);
-
-    return cacheutil.isValueValid(cr) ? cr : null;
   }
 }

@@ -1,0 +1,50 @@
+package	full_graph_severity	node_omit_dev_optional_severity	affected_locked_versions	direct_advisory_urls	via_packages
+decompress	critical	-	4.2.1	https://github.com/advisories/GHSA-h39j-r5qq-r9mm, https://github.com/advisories/GHSA-hrh2-vp3x-79xf, https://github.com/advisories/GHSA-jwp9-9v96-94mx, https://github.com/advisories/GHSA-mp2f-45pm-3cg9	-
+form-data	critical	-	2.3.3	https://github.com/advisories/GHSA-fjxv-7rqg-78g4, https://github.com/advisories/GHSA-hmw2-7cc7-3qxx	-
+request	critical	-	2.88.2	https://github.com/advisories/GHSA-p8p7-x288-28g6	form-data, qs, tough-cookie, uuid
+tar	critical	critical	6.2.1	https://github.com/advisories/GHSA-23hp-3jrh-7fpw, https://github.com/advisories/GHSA-34x7-hfp2-rc4v, https://github.com/advisories/GHSA-83g3-92jg-28cx, https://github.com/advisories/GHSA-8qq5-rm4j-mr97, https://github.com/advisories/GHSA-8x88-c5mf-7j5w, https://github.com/advisories/GHSA-9ppj-qmqm-q256, https://github.com/advisories/GHSA-gvwx-54wh-qm9j, https://github.com/advisories/GHSA-qffp-2rhf-9h96, https://github.com/advisories/GHSA-r292-9mhp-454m, https://github.com/advisories/GHSA-r6q2-hw4h-h46w, https://github.com/advisories/GHSA-vmf3-w455-68vh, https://github.com/advisories/GHSA-w8wr-v893-vjvp	-
+@clinic/bubbleprof	high	-	8.0.1	-	d3-color
+@fastify/busboy	high	-	2.1.1	https://github.com/advisories/GHSA-gxm5-99cw-xjw9, https://github.com/advisories/GHSA-x8mw-p69m-v3mx	-
+@fastly/js-compute	high	-	3.46.0	-	@bytecodealliance/weval, picomatch
+@mapbox/node-pre-gyp	high	high	1.0.11	-	tar
+@riaskov/mmap-io	high	high	1.5.0	-	@mapbox/node-pre-gyp, node-gyp
+cacache	high	high	18.0.4	-	glob, tar
+clinic	high	-	11.1.2	-	@clinic/bubbleprof, @clinic/doctor, autocannon, insight, update-notifier
+d3-color	high	-	1.4.1	https://github.com/advisories/GHSA-36jr-mh4h-2g58	-
+lint-staged	high	-	12.5.0	-	micromatch
+make-fetch-happen	high	high	13.0.1	-	cacache
+micromatch	high	-	4.0.8	-	picomatch
+miniflare	high	-	3.20250718.3	-	undici, ws, zod
+node-gyp	high	high	10.3.1	-	glob, make-fetch-happen, tar
+picomatch	high	-	2.3.2, 4.0.7	https://github.com/advisories/GHSA-fc5q-39xc-vjpf	-
+sharp	high	-	0.33.5	https://github.com/advisories/GHSA-f88m-g3jw-g9cj, https://github.com/advisories/GHSA-rgj7-g3m4-5g8c, https://github.com/advisories/GHSA-wq5f-xc86-pv6w	-
+tmp	high	-	0.0.33	https://github.com/advisories/GHSA-52f5-9888-hmc6, https://github.com/advisories/GHSA-ph9p-34f9-6g65	-
+undici	high	-	5.29.0	https://github.com/advisories/GHSA-2m5v-pch6-74hx, https://github.com/advisories/GHSA-2mjp-6q6p-2qxm, https://github.com/advisories/GHSA-35p6-xmwp-9g52, https://github.com/advisories/GHSA-4992-7rv2-5pvq, https://github.com/advisories/GHSA-8xcm-r25x-g524, https://github.com/advisories/GHSA-9fm3-97px-rjf6, https://github.com/advisories/GHSA-g8m3-5g58-fq7m, https://github.com/advisories/GHSA-g9mf-h72j-4rw9, https://github.com/advisories/GHSA-m8rv-5g2x-5cg5, https://github.com/advisories/GHSA-p88m-4jfj-68fv, https://github.com/advisories/GHSA-qrxm-fqhp-jwvm, https://github.com/advisories/GHSA-r53p-7pc4-xj5r, https://github.com/advisories/GHSA-v3r7-h72x-cjcm, https://github.com/advisories/GHSA-v9p9-hfj2-hcw8, https://github.com/advisories/GHSA-vrm6-8vpv-qv8q, https://github.com/advisories/GHSA-vxpw-j846-p89q	@fastify/busboy
+wrangler	high	-	3.114.17	-	esbuild, miniflare, sharp
+ws	high	-	8.18.0	https://github.com/advisories/GHSA-58qx-3vcg-4xpx, https://github.com/advisories/GHSA-96hv-2xvq-fx4p	-
+zod	high	-	3.22.3	https://github.com/advisories/GHSA-mrhx-c7xc-m3w5	-
+@bytecodealliance/jco	moderate	-	1.42.0	-	@bytecodealliance/jco-std
+@bytecodealliance/jco-std	moderate	-	0.11.0	-	minimatch
+@bytecodealliance/weval	moderate	-	0.3.4	-	decompress
+@clinic/doctor	moderate	-	9.2.1	-	showdown
+autocannon	moderate	-	7.15.0	-	hyperid
+esbuild	moderate	-	0.17.19	https://github.com/advisories/GHSA-67mh-4wv8-2f99	-
+glob	moderate	moderate	10.5.0	https://github.com/advisories/GHSA-3g3m-2fjr-6pw4	minimatch
+got	moderate	-	9.6.0	https://github.com/advisories/GHSA-pfrx-2q88-qq97	-
+hyperid	moderate	-	3.3.0	-	uuid
+insight	moderate	-	0.11.1	-	inquirer, request, uuid
+latest-version	moderate	-	5.1.0	-	package-json
+minimatch	moderate	moderate	10.2.6, 9.0.9	https://github.com/advisories/GHSA-g3hv-75wg-m249	-
+package-json	moderate	-	6.5.0	-	got
+qs	moderate	-	6.5.5	https://github.com/advisories/GHSA-4mjr-xmp4-gh2g, https://github.com/advisories/GHSA-6rw7-vpxm-498p	-
+showdown	moderate	-	1.9.1	https://github.com/advisories/GHSA-22g5-r2x5-97cx, https://github.com/advisories/GHSA-cr32-g25g-vxjj, https://github.com/advisories/GHSA-rmmh-p597-ppvv	-
+tough-cookie	moderate	-	2.5.0	https://github.com/advisories/GHSA-72xf-g2v4-qvf3	-
+update-notifier	moderate	-	5.1.0	-	latest-version
+uuid	moderate	-	3.4.0, 8.3.2	https://github.com/advisories/GHSA-w5hq-g745-h8pq	-
+browserify-sign	low	low	4.2.6	-	elliptic
+create-ecdh	low	low	4.0.5	-	elliptic
+crypto-browserify	low	low	3.12.1	-	browserify-sign, create-ecdh
+elliptic	low	low	6.6.1	https://github.com/advisories/GHSA-848j-6mx2-7j84	-
+external-editor	low	-	3.1.0	-	tmp
+inquirer	low	-	6.5.2	-	external-editor
+node-polyfill-webpack-plugin	low	low	2.0.1	-	crypto-browserify

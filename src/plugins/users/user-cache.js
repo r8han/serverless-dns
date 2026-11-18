@@ -24,7 +24,7 @@ export class UserCache {
     try {
       this.cache.put(key, val);
     } catch (e) {
-      this.log.e("put", key, val, e.stack);
+      this.log.w("policy cache write failed");
     }
   }
 }

@@ -1,21 +1,18 @@
-FROM oven/bun AS setup
-WORKDIR /bun-dir
-COPY . .
-RUN bun install
-# flybun --packages=external to ask bun to not resolve @riaskov/mmap-io (which brings in mapbox among other deps)
-RUN npm run build:flybun
-RUN export BLOCKLIST_DOWNLOAD_ONLY=true && bun run ./dist/bun.mjs --smol
-
-FROM oven/bun:alpine AS runner
-# env vals persist even at run-time: archive.is/QpXp2
-# and overrides fly.toml env values
-# get working dir in order
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS setup
 WORKDIR /app
-COPY --from=setup /bun-dir/dist ./
-COPY --from=setup /bun-dir/blocklists__ ./blocklists__
-COPY --from=setup /bun-dir/dbip__ ./dbip__
-# @riaskov/mmap-io native is unused in bun as it has built-in mmap support
-# print files in work dir, must contain blocklists
-RUN ls -Fla
-# run with the default entrypoint (usually, bash or sh)
-CMD ["bun", "run", "./bun.mjs", "--smol"]
+COPY scripts/ scripts/
+COPY src/ src/
+COPY config/blocklist-manifest.json config/
+COPY package.json bun.lock ./
+RUN node scripts/runtime-binary.mjs bun && bun install --frozen-lockfile --ignore-scripts --omit optional
+RUN bun run build:flybun && sh scripts/prepare.sh --assets
+
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+ENV NODE_ENV=production BUN_ENV=production
+WORKDIR /app
+COPY --from=setup /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=setup /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=setup /app/dist/bun.mjs ./
+COPY --from=setup /app/blocklists__ ./blocklists__/
+USER 65532:65532
+CMD ["bun", "run", "./bun.mjs"]

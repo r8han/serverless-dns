@@ -6,27 +6,20 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 import * as trie from "@serverless-dns/trie/stamp.js";
-import { rbase32 } from "../commons/b32.js";
+import { base32, rbase32 } from "../commons/b32.js";
 import * as bufutil from "../commons/bufutil.js";
 import * as dnsutil from "../commons/dnsutil.js";
 import * as envutil from "../commons/envutil.js";
 import * as util from "../commons/util.js";
 import { log } from "../core/log.js";
-import { DnsCacheData } from "./cache-util.js";
 import * as pres from "./plugin-response.js";
 import { BlocklistFilter } from "./rethinkdns/filter.js";
 
 // doh uses b64url encoded blockstamp, while dot uses lowercase b32.
 const _b64delim = ":";
 const _b32delim = "-";
-// begins with l, followed by b64delim or b32delim
-export const logPrefix = new RegExp(`^l${_b64delim}|^l${_b32delim}`);
 // begins with a digit, followed by b64delim or b32delim
 export const stampPrefix = new RegExp(`^\\d+${_b64delim}|^\\d+${_b32delim}`);
-
-const emptystr = "";
-// delim, version, blockstamp (flag), accesskey
-const emptystamp = [emptystr, emptystr, emptystr, emptystr];
 
 // pec: parental control, rec: recommended, sec: security
 const recBlockstamps = new Map();
@@ -79,14 +72,6 @@ export function isStampQuery(p) {
 }
 
 /**
- * @param {string} p
- * @returns {boolean}
- */
-export function isLogQuery(p) {
-  return logPrefix.test(p);
-}
-
-/**
  * dn         -> domain name, ex: you.and.i.example.com
  * userBlInfo -> user-selected blocklist-stamp
  *              {BlockstampInfo}
@@ -115,24 +100,11 @@ export function doBlock(dn, userBlInfo, dnBlInfo) {
     return applyWildcardBlocklists(dn, version, userUint, dnBlInfo);
   }
 
-  const dnUint = dnBlInfo[dn];
+  const dnUint = Object.hasOwn(dnBlInfo, dn) && dnBlInfo[dn];
   // if the domain isn't in block-info, we're done
   if (util.emptyArray(dnUint)) return noblock;
   // else, determine if user selected blocklist intersect with the domain's
   return applyBlocklists(version, userUint, dnUint);
-}
-
-/**
- * @param {DnsCacheData} cr
- * @returns {pres.BStamp|boolean}
- */
-export function blockstampFromCache(cr) {
-  const p = cr.dnsPacket;
-  const m = cr.metadata;
-
-  if (util.emptyObj(p) || util.emptyObj(m)) return false;
-
-  return m.stamps;
 }
 
 /**
@@ -177,7 +149,8 @@ function applyWildcardBlocklists(dn, flagVersion, usrUint, dnBlInfo) {
     if (util.emptyArray(dnSplit)) break;
 
     const subdomain = dnSplit.join(".");
-    const subdomainUint = dnBlInfo[subdomain];
+    const subdomainUint =
+      Object.hasOwn(dnBlInfo, subdomain) && dnBlInfo[subdomain];
 
     // the subdomain isn't present in any current blocklists
     if (util.emptyArray(subdomainUint)) continue;
@@ -285,10 +258,21 @@ function clearbit(uint, pos) {
   return uint & ~(1 << pos);
 }
 
-export function getB64Flag(uint16Arr, flagVersion) {
-  if (util.emptyArray(uint16Arr)) return "";
+export function getB64Flag(flags, flagVersion) {
+  if (!flags?.length) return "";
 
-  const b64url = bufutil.bytesToBase64Url(uint16Arr.buffer);
+  // Trie lookups yield 16-bit words, but tagsToFlags (listtob64) returns a
+  // binary string with one word per UTF-16 code unit.
+  const words =
+    typeof flags === "string"
+      ? Uint16Array.from(flags.split(""), (c) => c.charCodeAt(0))
+      : flags;
+  const bytes = new Uint8Array(
+    words.buffer,
+    words.byteOffset,
+    words.byteLength
+  );
+  const b64url = bufutil.bytesToBase64Url(bytes);
   if (flagVersion === "0") {
     return encodeURIComponent(b64url);
   } else if (flagVersion === "1") {
@@ -300,172 +284,37 @@ export function getB64Flag(uint16Arr, flagVersion) {
 }
 
 /**
- * Get msg key from `Request` URL
- * @param {string} u
- * @returns {string} k
- */
-export function msgkeyFromUrl(u) {
-  const ans = extractStamps(u);
-  // accesskey is at index 3
-  return ans[3] || "";
-}
-
-/**
  * Get the blocklist flag from `Request` URL
- * DNS over TLS flag from SNI is yanked into `url`'s pathname
+ * Node DoT supplies its SNI hostname to the same selector as DoH.
  * @param {string} u
  * @returns {string}
  */
-export function blockstampFromUrl(u) {
-  const ans = extractStamps(u);
-  const delim = ans[0];
-  const ver = ans[1] || ""; // may be undefined
-  const blockstamp = ans[2] || ""; // may be undefined
-
-  // delim at index 0, version at index 1, blockstamp at index 2
-  if (util.emptyString(ver) || util.emptyString(blockstamp)) return "";
-
-  return ver + delim + blockstamp;
-}
-
-/**
- * @param {URL} url
- * @returns {String} stampvalue
- */
-export function recBlockstampFrom(url) {
-  // is the incoming request to the legacy free.bravedns.com endpoint?
-  const isFreeBraveDns = url.hostname.includes("free.bravedns");
-  if (isFreeBraveDns) return "rec";
-
-  for (const [k, v] of recBlockstamps) {
-    // does incoming request have a rec in its path? (DoH)
-    if (
-      url.pathname.includes("/" + k + "/") ||
-      url.pathname.endsWith("/" + k)
-    ) {
-      return v;
-    }
-    // does incoming request have a rec in its hostname? (DoT)
-    if (url.hostname.startsWith(k + ".")) return v;
-  }
-
-  return "";
-}
-
-/**
- * @param {string} u - Request URL string
- * @returns {string[]} s - delim, version, blockstamp (flag), accesskey
- */
-export function extractStamps(u) {
+export function blockstampFromUrl(u, dnsOnly = false) {
   const url = new URL(u);
-  const recStamp = recBlockstampFrom(url);
-  const useRecStamp = !util.emptyString(recStamp);
-
-  let s = emptystr;
-  // note: the legacy free.bravedns endpoint need not support
-  // gateway queries or auth
-  if (useRecStamp) {
-    s = recStamp;
+  const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const labels = url.hostname.split(".");
+  const selected = labels.filter(isStampQuery);
+  if (recBlockstamps.has(labels[0])) {
+    selected.push(recBlockstamps.get(labels[0]));
   }
-
-  const paths = url.pathname.split("/");
-  const domains = url.hostname.split(".");
-  // could be a b32 flag in the hostname,
-  // even if its a http-req (possible for a cc request)
-  for (const d of domains) {
-    if (d.length === 0) continue;
-    // capture the first occurence of a b32 delimiter "-"
-    if (isStampQuery(d)) {
-      s = d;
-      break;
+  for (const p of path) {
+    if (isStampQuery(p)) selected.push(p);
+    else if (recBlockstamps.has(p)) selected.push(recBlockstamps.get(p));
+    else if (dnsOnly && p !== "dns-query" && p !== "gateway") {
+      throw new Error("unknown DNS route or policy");
     }
   }
-  // overwrite if there exists a b64 flag in path
-  for (const p of paths) {
-    if (p.length === 0) continue;
-    // skip to next if path has `/dns-query` or `/gateway` or '/l:'
-    if (isStampQuery(p)) {
-      s = p;
-      break;
-    }
-  }
-
-  // get blockstamp with access-key from paths[1|2] or from hostname[0|1]
-  try {
-    // FIXME: the array returned here may not always be of length 4
-    return splitBlockstamp(s);
-  } catch (e) {
-    log.d("Rdns:blockstampFromUrl", e);
-  }
-
-  return emptystamp;
+  if (selected.length > 1) throw new Error("ambiguous policy");
+  return (
+    selected[0] ??
+    (url.hostname === "free.bravedns.com" ? recBlockstamps.get("rec") : "")
+  );
 }
 
-/**
- * @param {string} b64Flag
- * @returns {Uint16Array}
- */
-export function base64ToUintV0(b64Flag) {
-  // TODO: v0 not in use, remove all occurences
-  // FIXME: Impl not accurate
-  // celzero/website-dns/blob/7b3a74185/src/js/flag.js#L117
-  const f = decodeURIComponent(b64Flag);
-  return bufutil.base64ToUint16(f);
-}
-
-/**
- * @param {string} b64Flag
- * @returns {Uint16Array}
- */
-export function base64ToUintV1(b64Flag) {
-  // TODO: check for empty b64Flag
-  return bufutil.base64ToUint16(b64Flag);
-}
-
-/**
- * @param {string} b64Flag
- * @returns {Uint16Array?}
- */
-export function base32ToUintV1(flag) {
-  try {
-    if (util.emptyString(flag)) return null;
-    const b32 = decodeURI(flag);
-    if (util.emptyString(b32)) return null;
-
-    const decoded = rbase32(b32);
-    if (util.emptyString(decoded)) return null;
-
-    return bufutil.decodeFromBinaryArray(decoded);
-  } catch (e) {
-    log.w("Rdns:base32ToUintV1", "error decoding b32 flag", e);
-  }
-  return null;
-}
-
-/**
- * @param {string} s
- * @returns {string[]} [delim, ver, blockstamp, accesskey]
- */
-function splitBlockstamp(s) {
-  if (util.emptyString(s)) return emptystamp;
-  if (!isStampQuery(s)) return emptystamp;
-
-  if (isB32Stamp(s)) {
-    // delim, version, blockstamp, accesskey
-    return [_b32delim, ...s.split(_b32delim)];
-  } else {
-    return [_b64delim, ...s.split(_b64delim)];
-  }
-}
-
-/**
- * @param {string} s
- * @returns {boolean}
- */
 export function isB32Stamp(s) {
   const idx32 = s.indexOf(_b32delim);
   const idx64 = s.indexOf(_b64delim);
-  if (idx32 === -1 && idx64 === -1) throw new Error("invalid stamp: " + s);
+  if (idx32 === -1 && idx64 === -1) throw new Error("invalid policy");
   else if (idx32 === -1) return false;
   else if (idx64 === -1) return true;
   else return idx32 < idx64;
@@ -503,17 +352,39 @@ export function unstamp(flag) {
   const s = flag.split(isFlagB32 ? _b32delim : _b64delim);
   const v = stampVersion(s);
 
-  r.flagVersion = v;
-  if (v === "0") {
-    const f = s[0];
-    r.userBlocklistFlagUint = base64ToUintV0(f) || null;
-  } else if (v === "1") {
-    const convertor = isFlagB32 ? base32ToUintV1 : base64ToUintV1;
-    const f = s[1];
-    r.userBlocklistFlagUint = convertor(f) || null; // convertor may return null
-  } else {
-    log.w("Rdns:unstamp", "unknown blocklist stamp version in " + s);
+  if (v !== "1" || s.length !== 2 || !s[1] || s[1].length > 256) {
+    throw new Error("invalid policy");
   }
+  const str = decodeURIComponent(s[1]);
+  if (
+    !(isFlagB32 ? /^[a-z2-7]+={0,6}$/i : /^[A-Za-z0-9_-]+={0,2}$/).test(str)
+  ) {
+    throw new Error("invalid policy encoding");
+  }
+  const bytes = isFlagB32
+    ? rbase32(str)
+    : new Uint8Array(bufutil.base64ToBytes(str));
+  if (!bytes.length || bytes.length % 2) {
+    throw new Error("invalid policy length");
+  }
+  const canonical = isFlagB32
+    ? base32(bytes, false)
+    : bufutil.bytesToBase64Url(bytes);
+  const padded = canonical.padEnd(
+    Math.ceil(canonical.length / (isFlagB32 ? 8 : 4)) * (isFlagB32 ? 8 : 4),
+    "="
+  );
+  const submitted = isFlagB32 ? str.toUpperCase() : str;
+  if (submitted !== canonical && submitted !== padded) {
+    throw new Error("noncanonical policy");
+  }
+  const flags = bufutil.decodeFromBinaryArray(bytes);
+  const groups = flags[0].toString(2).replace(/0/g, "").length;
+  if (flags.length !== groups + 1 || flags.subarray(1).includes(0)) {
+    throw new Error("invalid policy groups");
+  }
+  r.flagVersion = v;
+  r.userBlocklistFlagUint = flags;
   return r;
 }
 

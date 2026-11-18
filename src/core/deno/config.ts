@@ -1,7 +1,6 @@
 // deno-lint-ignore-file no-var
 import * as system from "../../system.js";
 import * as blocklists from "./blocklists.ts";
-import * as dbip from "./dbip.ts";
 import { services, stopAfter } from "../svc.js";
 import Log, { setLogger } from "../log.js";
 import EnvManager from "../env.js";
@@ -50,20 +49,14 @@ async function up() {
   }
 
   const bw = services.blocklistWrapper;
+  if (Deno.env.get("CLOUD_PLATFORM") === "deno-deploy") {
+    system.pub("go"); // no filesystem or process signal handlers on managed Deploy
+    return;
+  }
   if (bw != null && !bw.disabled()) {
     await blocklists.setup(bw);
   } else {
     console.warn("Config", "blocklists unavailable / disabled");
-  }
-  const lp = services.logPusher;
-  if (lp != null) {
-    try {
-      await dbip.setup(lp);
-    } catch (ex) {
-      console.error("Config", "dbip setup failed", ex);
-    }
-  } else {
-    console.warn("Config", "logpusher unavailable");
   }
 
   // docs.deno.com/runtime/tutorials/os_signals

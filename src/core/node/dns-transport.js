@@ -8,7 +8,7 @@
 import dgram from "node:dgram";
 import net from "node:net";
 import * as util from "../../commons/util.js";
-import { TcpConnPool, UdpConnPool } from "../dns/conns.js";
+import { IdlePool } from "../dns/conns.js";
 import { TcpTx, UdpTx } from "../dns/transact.js";
 import { log } from "../log.js";
 
@@ -51,19 +51,18 @@ export class Transport {
     this.ipproto = net.isIP(host); // 4, 6, or 0
     const sz = opts.poolSize || 500; // conns
     const ttl = opts.poolTtl || 60000; // 1m
-    /** @type {TcpConnPool} */
-    this.tcpconns = new TcpConnPool(sz, ttl);
-    /** @type {UdpConnPool} */
-    this.udpconns = new UdpConnPool(sz, ttl);
+    this.tcpconns = new IdlePool(true, sz, ttl);
+    this.udpconns = new IdlePool(false, sz, ttl);
+    this.shutdown = new AbortController();
 
     this.log = log.withTags("DnsTransport");
     this.log.i(this.ipproto, "W transport", host, port, "pool", sz, ttl);
   }
 
   async teardown() {
-    const r1 = this.tcpconns.sweep(true);
-    const r2 = this.udpconns.sweep(true);
-    this.log.i("transport teardown (tcp | udp) done?", r1, "|", r2);
+    this.shutdown.abort();
+    this.tcpconns.drain();
+    this.udpconns.drain();
   }
 
   /**
@@ -71,57 +70,38 @@ export class Transport {
    * @param {Buffer} q
    * @returns {Promise<Buffer>|null}
    */
-  async udpquery(rxid, q) {
-    let sock = this.udpconns.take();
-    this.log.d(rxid, "udp pooled?", sock !== null);
-
-    /** @type {Buffer?} */
-    let ans = null;
-    try {
-      sock = sock || (await this.makeConn("udp"));
-      ans = await UdpTx.begin(sock).exchange(rxid, q, this.ioTimeout);
-      this.parkConn(sock, "udp");
-    } catch (ex) {
-      this.closeUdp(sock);
-      this.log.e(rxid, ex);
-    }
-    return ans;
+  udpquery(rxid, q, signal) {
+    return this.exchange("udp", rxid, q, signal);
+  }
+  tcpquery(rxid, q, signal) {
+    return this.exchange("tcp", rxid, q, signal);
   }
 
-  /**
-   * @param {string} rxid
-   * @param {Buffer} q
-   * @returns {Promise<Buffer>|null}
-   */
-  async tcpquery(rxid, q) {
-    let sock = this.tcpconns.take();
-    this.log.d(rxid, "tcp pooled?", sock != null);
-
-    /** @type {Buffer?} */
-    let ans = null;
+  async exchange(proto, rxid, q, signal) {
+    const tcp = proto === "tcp";
+    const pool = tcp ? this.tcpconns : this.udpconns;
+    let sock;
+    const close = () => {
+      pool.discard(sock);
+      sock = null;
+    };
+    const shutdown = this.shutdown.signal;
+    signal = signal ? AbortSignal.any([signal, shutdown]) : shutdown;
     try {
-      sock = sock || (await this.makeConn("tcp"));
-      ans = await TcpTx.begin(sock).exchange(rxid, q, this.ioTimeout);
-      this.parkConn(sock, "tcp");
-    } catch (ex) {
-      this.closeTcp(sock);
-      this.log.e(rxid, ex);
-    }
-
-    return ans;
-  }
-
-  /**
-   * @param {AnySock} sock
-   * @param {string} proto
-   */
-  parkConn(sock, proto) {
-    if (proto === "tcp") {
-      const ok = this.tcpconns.give(sock);
-      if (!ok) this.closeTcp(sock);
-    } else if (proto === "udp") {
-      const ok = this.udpconns.give(sock);
-      if (!ok) this.closeUdp(sock);
+      signal.throwIfAborted();
+      sock = pool.take() || (await this.makeConn(proto, signal));
+      signal.throwIfAborted();
+      signal.addEventListener("abort", close, { once: true });
+      const tx = tcp ? TcpTx.begin(sock) : UdpTx.begin(sock);
+      const ans = await tx.exchange(rxid, q, this.ioTimeout);
+      signal.throwIfAborted();
+      if (!pool.give(sock)) close();
+      return ans;
+    } catch {
+      close();
+      throw new Error("DNS transport unavailable");
+    } finally {
+      signal.removeEventListener("abort", close);
     }
   }
 
@@ -130,52 +110,39 @@ export class Transport {
    * @returns {Promise<AnySock>}
    * @throws {Error}
    */
-  makeConn(proto) {
-    if (proto === "tcp") {
-      const tcpconnect = (cb) => {
-        // not monitoring connection-error events, instead relying on timeouts
-        const sock = net.connect(this.port, this.host, () => cb(sock));
+  makeConn(proto, signal) {
+    return new Promise((resolve, reject) => {
+      const tcp = proto === "tcp";
+      const sock = tcp
+        ? new net.Socket()
+        : dgram.createSocket(this.ipproto === 6 ? "udp6" : "udp4");
+      let settled = false;
+      const cleanup = () => {
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", fail);
       };
-      return util.timedOp(tcpconnect, this.connectTimeout, this.closeTcp);
-    } else if (proto === "udp") {
-      // connected udp-sockets: archive.is/JJxaV
-      const udpconnect = (cb) => {
-        let sock = null;
-        if (this.ipproto === 6) {
-          sock = dgram.createSocket("udp6");
-        } else {
-          // default
-          sock = dgram.createSocket("udp4");
-        }
-        // connect error, if any, is sent to the connection-callback
-        sock.connect(this.port, this.host, (err) => cb(sock, err));
+      const fail = () => {
+        if (settled) return;
+        cleanup();
+        (tcp ? this.tcpconns : this.udpconns).discard(sock);
+        reject(new Error("DNS connect failed"));
       };
-      return util.timedOp(udpconnect, this.connectTimeout, this.closeUdp);
-    } else {
-      throw new Error("unsupported proto: " + proto);
-    }
-  }
-
-  /**
-   * @param {TcpSock?} sock
-   */
-  closeTcp(sock) {
-    if (!sock) return;
-    // the socket is not expected to have any error-listeners
-    // so we add one to avoid unhandled errors
-    sock.on("error", util.stub);
-    if (!sock.destroyed) sock.destroySoon();
-  }
-
-  /**
-   * @param {UdpSock?} sock
-   */
-  closeUdp(sock) {
-    if (!sock || sock.destroyed) return;
-    // the socket is expected to not have any error-listeners
-    // so we add one just in case to avoid unhandled errors
-    sock.on("error", util.stub);
-    sock.disconnect();
-    sock.close();
+      const timer = setTimeout(fail, this.connectTimeout);
+      sock.once("error", fail);
+      signal?.addEventListener("abort", fail, { once: true });
+      if (signal?.aborted) return fail();
+      try {
+        sock.connect(this.port, this.host, (err) => {
+          if (settled) return;
+          if (err) return fail();
+          cleanup();
+          sock.off("error", fail);
+          resolve(sock);
+        });
+      } catch {
+        fail();
+      }
+    });
   }
 }

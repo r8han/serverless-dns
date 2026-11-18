@@ -10,14 +10,12 @@ import * as dnsutil from "../../commons/dnsutil.js";
 import * as envutil from "../../commons/envutil.js";
 import * as util from "../../commons/util.js";
 import { log } from "../../core/log.js";
-import * as psk from "../../core/psk.js";
 import { DNSResolver } from "../dns-op/dns-op.js";
 import { LogPusher } from "../observability/log-pusher.js";
 import * as pres from "../plugin-response.js";
 import * as rdnsutil from "../rdns-util.js";
 import { BlocklistFilter } from "../rethinkdns/filter.js";
 import { BlocklistWrapper } from "../rethinkdns/main.js";
-import * as token from "../users/auth-token.js";
 
 export class CommandControl {
   constructor(blocklistWrapper, resolver, logPusher) {
@@ -37,6 +35,7 @@ export class CommandControl {
       "listtob64",
       "b64tolist",
       "genaccesskey",
+      "gentlspsk",
       "analytics",
       "logs",
     ]);
@@ -54,7 +53,7 @@ export class CommandControl {
         ctx.request,
         ctx.isDnsMsg,
         ctx.userAuth,
-        ctx.lid
+        ctx.signal
       );
     }
 
@@ -80,7 +79,10 @@ export class CommandControl {
     // When incoming request is a dns-msg, all cmds are no-op
     if (isDnsCmd) return "";
 
-    return rdnsutil.blockstampFromUrl(url);
+    const stamp = rdnsutil.blockstampFromUrl(url);
+    if (!stamp) return "";
+    const { userBlocklistFlagUint, flagVersion } = rdnsutil.unstamp(stamp);
+    return rdnsutil.getB64Flag(userBlocklistFlagUint, flagVersion);
   }
 
   /**
@@ -90,9 +92,9 @@ export class CommandControl {
    * @param {token.Outcome} auth
    * @param {string} lid
    */
-  async commandOperation(rxid, req, isDnsCmd, auth, lid) {
+  async commandOperation(rxid, req, isDnsCmd, auth, signal) {
     const url = req.url;
-    let response = pres.emptyResponse();
+    const response = pres.emptyResponse();
 
     try {
       const reqUrl = new URL(url);
@@ -109,7 +111,6 @@ export class CommandControl {
       }
 
       const cmds = this.userCommands(reqUrl, isDnsCmd);
-      const b64UserFlag = this.userFlag(url, isDnsCmd);
       // if userflag is same as cmd1, then cmd2 must be the actual cmd
       // consider urls: r.tld/cmd/flag & r.tld/flag/cmd
       // by default, treat cmd1 (at path[1]) as cmd, regardless
@@ -121,8 +122,27 @@ export class CommandControl {
         }
       }
 
-      this.log.d(rxid, url, "processing... cmd/flag", command, b64UserFlag);
-
+      if (command === "genaccesskey" || command === "gentlspsk") {
+        response.data.httpResponse = new Response(null, {
+          status: 410,
+          headers: { "cache-control": "private, no-store" },
+        });
+        return response;
+      }
+      if (command === "logs" || command === "analytics") {
+        response.data.httpResponse = await this.lp.read(
+          command,
+          req,
+          auth,
+          signal
+        );
+        return response;
+      }
+      if (auth?.scope === "read") {
+        response.data.httpResponse = new Response(null, { status: 403 });
+        return response;
+      }
+      const b64UserFlag = this.userFlag(url, isDnsCmd);
       // blocklistFilter may not have been setup, so set it up
       await this.bw.init(rxid, /* force-wait */ true);
       const blf = this.bw.getBlocklistFilter();
@@ -143,37 +163,15 @@ export class CommandControl {
           blfts,
           req,
           queryString,
-          blf
+          blf,
+          signal
         );
       } else if (command === "dntouint") {
         // convert names to flags
-        response.data.httpResponse = domainNameToUint(
-          this.resolver,
-          queryString,
-          blf
-        );
+        response.data.httpResponse = domainNameToUint(queryString, blf);
       } else if (command === "search") {
         // redirect to the search page with blockstamp (b64) preloaded
         response.data.httpResponse = searchRedirect(b64UserFlag);
-      } else if (command === "genaccesskey") {
-        // generate a token
-        response.data.httpResponse = await generateAccessKey(
-          queryString,
-          reqUrl.hostname
-        );
-      } else if (command === "gentlspsk") {
-        response.data.httpResponse = await generateTlsPsk();
-      } else if (command === "analytics") {
-        // redirect to the analytics page
-        response.data.httpResponse = await analytics(
-          this.lp,
-          reqUrl,
-          auth,
-          lid
-        );
-      } else if (command === "logs") {
-        // redirect to the logs page
-        response.data.httpResponse = await logs(this.lp, reqUrl, auth, lid);
       } else if (command === "config" || command === "configure" || !isDnsCmd) {
         // redirect to configure page
         response.data.httpResponse = configRedirect(
@@ -187,10 +185,9 @@ export class CommandControl {
         response.data.httpResponse = util.respond400();
       }
     } catch (e) {
-      this.log.e(rxid, "err cc:op", e.stack);
-      response = pres.errResponse("cc:op", e);
-      // TODO: set response status to 5xx
-      response.data.httpResponse = jsonResponse(e.stack);
+      this.log.w(rxid, "invalid command or service unavailable");
+      response.data.stopProcessing = true;
+      response.data.httpResponse = util.respond400();
     }
 
     return response;
@@ -219,97 +216,14 @@ function configRedirect(userFlag, origin, timestamp, highlight) {
   return Response.redirect(u + q, 302);
 }
 
-async function generateAccessKey(queryString, hostname) {
-  const msg = queryString.get("key");
-  const dom = queryString.get("dom");
-  if (!util.emptyString(dom)) {
-    hostname = dom;
-  }
-  const toks = [];
-  for (const d of util.domains(hostname)) {
-    if (util.emptyString(d)) continue;
-
-    const [_, hexcat] = await token.gen(msg, d);
-    toks.push(hexcat);
-  }
-
-  return jsonResponse({ accesskey: toks, context: token.info });
-}
-
-/**
- * Returns PSK identity (random 32 bytes as hex) and PSK key derived from KDF_SVC secret.
- * @returns {Promise<Response>}
- */
-async function generateTlsPsk() {
-  if (!envutil.allowTlsPsk()) {
-    return util.respond503();
-  }
-
-  const pskcreds = await psk.generateTlsPsk();
-  return jsonResponse(pskcreds.json());
-}
-
-/**
- *
- * @param {LogPusher} lp
- * @param {URL} reqUrl
- * @param {token.Outcome} auth
- * @param {string} lid
- * @returns {Promise<Response>}
- */
-async function logs(lp, reqUrl, auth, lid) {
-  if (util.emptyString(lid) || auth.no) {
-    return util.respond401();
-  }
-
-  const p = reqUrl.searchParams;
-  const s = p.get("start");
-  const e = p.get("end");
-  const b = await lp.remotelogs(lid, s, e);
-  // do not await on the response body, instead stream it out
-  // blog.cloudflare.com/workers-optimization-reduces-your-bill
-  return plainResponse(b);
-}
-
-/**
- * @param {LogPusher} lp
- * @param {URL} reqUrl
- * @param {token.Outcome} auth
- * @param {string} lid
- * @returns {Promise<Response>}
- */
-async function analytics(lp, reqUrl, auth, lid) {
-  if (util.emptyString(lid) || auth.no) {
-    return util.respond401();
-  }
-
-  const p = reqUrl.searchParams;
-  const t = p.get("t");
-  const f = p.getAll("f");
-  const d = p.get("d");
-  const l = p.get("l");
-  const r = await lp.count1(lid, f, t, d, l);
-  // do not await on the response body, instead stream it out
-  // blog.cloudflare.com/workers-optimization-reduces-your-bill
-  return plainResponse(r.body);
-}
-
-/**
- * @param {string} rxid
- * @param {DNSResolver} resolver
- * @param {string} ts
- * @param {Request} req
- * @param {string} queryString
- * @param {BlocklistFilter} blocklistFilter
- * @returns {Promise<Response>}
- */
 async function domainNameToList(
   rxid,
   resolver,
   ts,
   req,
   queryString,
-  blocklistFilter
+  blocklistFilter,
+  signal
 ) {
   const domainName = queryString.get("dn") || "";
   const latestTimestamp = util.bareTimestampFrom(ts);
@@ -331,23 +245,16 @@ async function domainNameToList(
   const forcedoh = true;
   const query = dnsutil.mkQ(qid, qs);
   const querypacket = dnsutil.decode(query);
-  const rmax = resolver.determineDohResolvers(resolver.ofMax(), forcedoh);
-  const res = await resolver.resolveDnsUpstream(
+  const rmax = resolver.determineDohResolvers(null, forcedoh);
+  const { packet: anspacket } = await resolver.queryUpstream(
     rxid,
     ts,
     req,
     rmax,
     query,
-    querypacket
+    querypacket,
+    signal
   );
-  const ans = await res.arrayBuffer();
-  let anspacket;
-  try {
-    anspacket = dnsutil.decode(ans);
-  } catch (e) {
-    log.w(rxid, "malformed dns response in command-control:", e.message);
-    return r; // empty response
-  }
   const ansdomains = dnsutil.extractDomains(anspacket);
 
   for (const d of ansdomains) {
@@ -412,9 +319,16 @@ function domainNameToUint(queryString, blocklistFilter) {
  * @returns {Response}
  */
 function listToB64(queryString) {
-  const list = queryString.get("list") || [];
-  const flagVersion = queryString.get("flagversion") || "0";
-  const tags = list.split(",");
+  const list = queryString.get("list") || "";
+  const flagVersion = queryString.get("flagversion") || "1";
+  const tags = list ? list.split(",") : [];
+  if (
+    flagVersion !== "1" ||
+    tags.length > 256 ||
+    tags.some((t) => !/^(?:0|[1-9]\d{0,2})$/.test(t) || Number(t) > 255)
+  ) {
+    throw new Error("invalid list selection");
+  }
   const stamp = rdnsutil.getB64Flag(tagsToFlags(tags), flagVersion);
 
   const r = {
@@ -475,12 +389,4 @@ function b64ToList(queryString, blocklistFilter) {
  */
 function jsonResponse(obj) {
   return new Response(JSON.stringify(obj), { headers: util.jsonHeaders() });
-}
-
-/**
- * @param {ReadableStream<*>?} body
- * @returns {Response}
- */
-function plainResponse(body) {
-  return new Response(body, { headers: util.corsHeaders() });
 }

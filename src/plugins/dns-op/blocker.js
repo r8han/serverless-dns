@@ -36,11 +36,6 @@ export class DnsBlocker {
       return req;
     }
 
-    if (!dnsutil.isQueryBlockable(dnsPacket)) {
-      this.log.d(rxid, "not a blockable dns-query");
-      return req;
-    }
-
     const domains = dnsutil.extractDomains(dnsPacket);
     const bres = this.block(domains, blockInfo, stamps);
 
@@ -65,16 +60,6 @@ export class DnsBlocker {
 
     if (!rdnsutil.hasBlockstamp(blockInfo)) {
       this.log.d(rxid, "ans: no user-set blockstamp");
-      return res;
-    }
-
-    if (!dnsutil.isAnswerBlockable(dnsPacket)) {
-      this.log.d(rxid, "ans not cloaked with cname/https/svcb");
-      return res;
-    }
-
-    if (dnsutil.isAnswerQuad0(dnsPacket)) {
-      this.log.d(rxid, "ans: already blocked");
       return res;
     }
 

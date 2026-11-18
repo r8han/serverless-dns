@@ -1,0 +1,44 @@
+{
+  "basicconfig": {
+    "version": 1,
+    "nodecount": 473,
+    "inspect": false,
+    "debug": false,
+    "selectsearch": true,
+    "useCodec6": true,
+    "optflags": true,
+    "tdpartsmaxmb": 0,
+    "timestamp": "2024/1706100000000",
+    "tdparts": -1,
+    "tdmd5": "65d1bf29e105f57eff630bfb579b4724",
+    "rdmd5": "dab0ce7be28b21bef3853908569304b1",
+    "ftmd5": "8e8a21f4becc8a60accd37ccdb1b2770",
+    "ftlmd5": "cf3f9fad48b148c3c962c5dbd1e0bf87"
+  },
+  "filetag": {
+    "0": {
+      "value": 0,
+      "uname": "0",
+      "url": [
+        ""
+      ],
+      "group": "test",
+      "pack": [],
+      "entries": 1,
+      "discards": 0
+    },
+    "1": {
+      "value": 1,
+      "uname": "1",
+      "url": [
+        ""
+      ],
+      "group": "test",
+      "pack": [],
+      "entries": 49,
+      "discards": 0
+    }
+  },
+  "td": "/r//Af/B///g/99g////v/+/AP//3/7////3///////9//v/9//v////YID/G////98A/wwY/wYb8MD/N2CA/2DABgwBA8CAMGAMGAMGgAFgwBgwBgwBA8CAMGAAGGDAGDAGDAADDAwDAzAAADAAAAAAAAAAAPIfU3Nx09L0dGAyVEB0UnJUdOsyElTUcqBLwKAS8TEScTHpECFhYUGhgfLBsRFQsdHRcqnQMXLxMRICCZhCGBgQGtKxUjFqkfFwUBIysVEJkbFw8SnRUIJRsRFSiRLyQLIQ0ZEJ0RGxkLGyscEJsnEQkbKx8Ugx8XISqXAaeLIQUTIRERHp8lGwkUrRkXER0dJxEmnRMRFSyRDSUNEQMpIRidExkbGoEFLxchJyMjGJcdGysKlx0jCxcDGRsKgy8bEQ6VEycfAxkfIxSnFx0HAJ0pER0ZHxMXJJcDKR8okxkXLxkDHykCoxsjGyyrBwcvLwsnBxCrEQMtFJcVGRUdHwMDHKcXIy0iiREdIS8bIxMIlx8vEwCnEwUdHRshCxifHx8DAosRr4GhhwEbLQ0lBxivHQkfLpMPExkVGwcJKpsTBRcWnRMFHy8VIS8YixsbIxaTLRETAR0fAYKRgaGBoRGpJScHESqjJysXFYKhAa0bDysfBpENFS0dgoGBoQGhHSklFRCVGR8TEYahgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoYGhgaGBoAGg==",
+  "rd": "2SZqp40OCqayIjC3s0zeVIA5"
+}

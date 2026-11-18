@@ -1,5 +1,4 @@
 const webpack = require("webpack");
-const NodePolyfillPlugin = require("node-polyfill-webpack-plugin");
 
 // developers.cloudflare.com/workers/cli-wrangler/configuration#modules
 // archive.is/FDky9
@@ -13,6 +12,9 @@ module.exports = {
   // gist.github.com/ef4/d2cf5672a93cf241fd47c020b9b3066a
   resolve: {
     fallback: {
+      // The read-only trie never invokes the builder's OS diagnostics.
+      os: false,
+      process: false,
       // buffer polyfill: archive.is/7OBM7
       buffer: require.resolve("buffer/"),
     },
@@ -34,7 +36,6 @@ module.exports = {
         /(^dgram$)|(^http2$)|(\/deno\/.*\.ts$)|(.*-deno\.ts$)|(.*\.deno\.ts$)|(\/node\/.*\.js$)|(.*-node\.js$)|(.*\.node\.js$)/,
     }),
     // stackoverflow.com/a/65556946
-    new NodePolyfillPlugin(),
   ],
 
   optimization: {

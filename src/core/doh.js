@@ -6,11 +6,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { cancelScope, checkAlive, whileAlive } from "../commons/cancel.js";
 import * as dnsutil from "../commons/dnsutil.js";
 import * as util from "../commons/util.js";
-import * as pres from "../plugins/plugin-response.js";
+import { services } from "./svc.js";
 import IOState from "./io-state.js";
-import { log } from "./log.js";
 import RethinkPlugin from "./plugin.js";
 
 // TODO: define FetchEventLike
@@ -19,70 +19,62 @@ import RethinkPlugin from "./plugin.js";
  */
 
 /**
- * @param {FetchEvent|FetchEventLike} event
- * @returns {Promise<Response>}
+ * Per-isolate request admission.
  */
-export function handleRequest(event) {
-  return proxyRequest(event);
-}
+let active = 0;
+const maxRequests = 256;
+const privateHeaders = {
+  "cache-control": "private, no-store",
+  "referrer-policy": "no-referrer",
+};
 
-/**
- * @param {FetchEvent} event
- * @returns {Promise<Response>}
- */
-async function proxyRequest(event) {
-  if (optionsRequest(event.request)) return util.respond204();
-  if (headRequest(event.request)) return util.respond204();
-
-  const io = new IOState();
-  const ua = event.request.headers.get("User-Agent");
-
-  try {
-    const plugin = new RethinkPlugin(event);
-    await plugin.initIoState(io);
-
-    // if an early response has been set by plugin.initIoState, return it
-    if (io.httpResponse) {
-      return withCors(io, ua);
-    }
-
-    await util.timedSafeAsyncOp(
-      /* op*/ () => plugin.execute(),
-      /* waitMs*/ dnsutil.requestTimeout(),
-      /* onTimeout*/ () => Promise.resolve(errorResponse(io))
-    );
-  } catch (err) {
-    log.e("doh", "proxy-request error", err.stack);
-    errorResponse(io, err);
+export async function handleRequest(event) {
+  const req = event.request;
+  if (req.url.length > 8192) {
+    return new Response(null, { status: 414, headers: privateHeaders });
   }
-
-  return withCors(io, ua);
-}
-
-function optionsRequest(request) {
-  return request.method === "OPTIONS";
-}
-
-function headRequest(request) {
-  return request.method === "HEAD";
-}
-
-/**
- * Must not throw!
- * @param {IOState} io
- * @param {Error} err
- */
-function errorResponse(io, err = null) {
-  const eres = pres.errResponse("doh.js", err);
-  io.dnsExceptionResponse(eres);
-}
-
-/**
- * @param {IOState} io
- * @param {string} ua
- * @returns {Response}
- */
-function withCors(io, ua) {
-  if (util.fromBrowser(ua)) io.setCorsHeadersIfNeeded();
-  return io.httpResponse;
+  if (!services.ready || active >= maxRequests) {
+    return new Response(null, { status: 503, headers: privateHeaders });
+  }
+  if (["OPTIONS", "HEAD"].includes(req.method)) {
+    return new Response(null, {
+      status: 204,
+      headers: { ...util.corsHeaders(), ...privateHeaders },
+    });
+  }
+  const wait = dnsutil.requestTimeout();
+  const deadline = Math.min(event.deadline ?? Infinity, Date.now() + wait);
+  const ctl = cancelScope([req.signal], deadline - Date.now());
+  if (Date.now() >= deadline) ctl.close();
+  active++;
+  try {
+    const signal = ctl.signal;
+    checkAlive(signal);
+    const io = new IOState();
+    const plugin = new RethinkPlugin(event);
+    plugin.addCtx("deadline", deadline);
+    plugin.addCtx("signal", signal);
+    const work = async () => {
+      await plugin.initIoState(io);
+      if (!io.httpResponse) await plugin.execute();
+      return io.httpResponse;
+    };
+    const r = await whileAlive(work(), signal);
+    const headers = new Headers(r.headers);
+    for (const [k, v] of Object.entries(privateHeaders)) headers.set(k, v);
+    if (r.ok && util.fromBrowser(req.headers.get("user-agent"))) {
+      for (const [k, v] of Object.entries(util.corsHeaders())) {
+        headers.set(k, v);
+      }
+    }
+    return new Response(r.body, { status: r.status, headers });
+  } catch {
+    return new Response(null, {
+      status: ctl.signal.aborted ? 408 : 503,
+      headers: privateHeaders,
+    });
+  } finally {
+    active--;
+    ctl.close();
+  }
 }

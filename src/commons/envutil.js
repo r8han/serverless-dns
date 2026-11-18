@@ -46,21 +46,6 @@ export function onLocal() {
   return !onFly() && !onDenoDeploy() && !onCloudflare() && !onFastly();
 }
 
-export function hasDisk() {
-  // got disk on fly and local deploys
-  return onFly() || onLocal();
-}
-
-export function useMmap() {
-  // got disk on fly and local deploys
-  return (onFly() || onLocal()) && (isNode() || isBun());
-}
-
-export function hasDynamicImports() {
-  if (onDenoDeploy() || onCloudflare() || onFastly()) return false;
-  return true;
-}
-
 export function hasHttpCache() {
   return isWorkers();
 }
@@ -109,8 +94,7 @@ export function downloadTimeout(missing = 0) {
 }
 
 export function bgDownloadBlocklistWrapper() {
-  if (!envManager) return false;
-  return onCloudflare();
+  return onCloudflare() && Boolean(maxDohUrl());
 }
 
 export function blocklistUrl() {
@@ -130,21 +114,24 @@ export function secondaryDohResolver() {
   return envManager.get("CF_DNS_RESOLVER_URL_2");
 }
 
-export function cfAccountId() {
-  if (!envManager) return "";
-  // a secret
-  return envManager.get("CF_ACCOUNT_ID") || "";
-}
-
-export function cfApiToken() {
-  if (!envManager) return "";
-  // a secret
-  return envManager.get("CF_API_TOKEN") || "";
-}
-
 export function maxDohUrl() {
-  if (!envManager) return null;
-  return envManager.get("MAX_DNS_RESOLVER_URL");
+  const value = globalThis.envManager?.get("MAX_DNS_RESOLVER_URL");
+  if (!value) return null;
+  try {
+    const u = new URL(value);
+    if (
+      u.protocol !== "https:" ||
+      u.username ||
+      u.password ||
+      /[?#]/.test(u.href)
+    ) {
+      return null;
+    }
+    if (!u.pathname.endsWith("/")) u.pathname += "/";
+    return u.href;
+  } catch {
+    return null; // invalid fallback: wait for local filtering instead
+  }
 }
 
 export function dohResolvers() {
@@ -159,11 +146,6 @@ export function dohResolvers() {
   return [primaryDohResolver()];
 }
 
-export function geoipUrl() {
-  if (!envManager) return null;
-  return envManager.get("GEOIP_URL");
-}
-
 export function tlsCrtPath() {
   if (!envManager) return "";
   return envManager.get("TLS_CRT_PATH") || "";
@@ -174,41 +156,14 @@ export function tlsKeyPath() {
   return envManager.get("TLS_KEY_PATH") || "";
 }
 
-export function tlsCrt() {
-  if (!envManager) return null;
-  return envManager.get("TLS_CRT") || null;
-}
-
-export function tlsKey() {
-  if (!envManager) return null;
-  return envManager.get("TLS_KEY") || null;
-}
-
 export function allowDomainFronting() {
   if (!envManager) return false;
   return envManager.get("TLS_ALLOW_ANY_SNI");
 }
 
-export function allowTlsPsk() {
-  if (isBun()) return false;
-  return tlsPskHex() != null;
-}
-
-export function tlsPskHex() {
-  if (!envManager) return null;
-  const psk = envManager.get("TLS_PSK");
-  if (psk == null || psk.length <= 0) return null;
-  return b64tohexIfNeeded(psk);
-}
-
 export function kdfSvcSecretHex() {
   if (!envManager) return null;
   return envManager.get("KDF_SVC") || null;
-}
-
-export function cacheTtl() {
-  if (!envManager) return 0;
-  return envManager.get("CACHE_TTL");
 }
 
 export function isDotOverProxyProto() {
@@ -222,7 +177,7 @@ export function isCleartext() {
 
   // when connecting to <appname>.fly.dev domains, fly.io edge handles tls;
   // and so, conns from fly.io edge to app is in cleartext
-  return envManager.get("TLS_OFFLOAD") || false;
+  return envManager.get("TLS_MODE") === "offload";
 }
 
 // sysctl get net.ipv4.tcp_syn_backlog
@@ -257,35 +212,11 @@ export function shutdownTimeoutMs() {
   return envManager.get("SHUTDOWN_TIMEOUT_MS") || 60 * 1000;
 }
 
-export function measureHeap() {
-  if (!envManager) return false;
-  const reg = region();
-  if (
-    reg === "bom" ||
-    reg === "sin" ||
-    reg === "fra" ||
-    reg === "ams" ||
-    reg === "lhr" ||
-    reg === "cdg" ||
-    reg === "iad" ||
-    reg === "mia"
-  ) {
-    return true;
-  }
-  return envManager.get("MEASURE_HEAP") || false;
-}
-
 export function blocklistDownloadOnly() {
   if (!envManager) return false;
 
   // run the server just to download the blocklist files and do nothing else
   return envManager.get("BLOCKLIST_DOWNLOAD_ONLY");
-}
-
-export function renewBlocklistsThresholdInWeeks() {
-  if (!envManager) return false;
-
-  return envManager.get("AUTO_RENEW_BLOCKLISTS_OLDER_THAN") || -1;
 }
 
 // Ports which the services are exposed on. Corresponds to fly.toml ports.
@@ -305,10 +236,6 @@ export function dotProxyProtoBackendPort() {
   return isDotOverProxyProto() ? 10000 : /* random*/ 0;
 }
 
-export function dotCleartextBackendPort() {
-  return isCleartext() ? 10555 : /* random*/ 0;
-}
-
 export function httpCheckPort() {
   return 8888;
 }
@@ -319,60 +246,14 @@ export function profileDnsResolves() {
   return envManager.get("PROFILE_DNS_RESOLVES") || false;
 }
 
-export function imageRef() {
-  if (!envManager) return "";
-  if (!onFly()) return "";
-
-  return envManager.get("FLY_IMAGE_REF") || "";
-}
-
 export function hostId() {
   if (!envManager) return "";
 
   return envManager.get("HOST_IDENTIFIER") || "";
 }
 
-export function secretb64() {
-  if (!envManager) return null;
-
-  const psk = envManager.get("TLS_PSK");
-  if (psk != null && psk.length > 0) {
-    return hex2b64IfNeeded(psk);
-  }
-  const topsecret = envManager.get("TOP_SECRET_512_B64");
-  if (topsecret != null && topsecret.length > 0) {
-    return hex2b64IfNeeded(topsecret);
-  }
-  return null;
-}
-
-function hex2b64IfNeeded(h) {
-  const ishex = /^[0-9a-fA-F]+$/.test(h);
-  if (!ishex) return h;
-
-  const u8 = new Uint8Array(h.match(/.{1,2}/g).map((w) => parseInt(w, 16)));
-  const b64 = btoa(String.fromCharCode(...u8));
-  return b64;
-}
-
-/**
- * @param {string} b64
- * @returns {string}
- */
-function b64tohexIfNeeded(b64) {
-  const ishex = /^[0-9a-fA-F]+$/.test(b64);
-  if (ishex) return b64;
-  // atob binary string is Latin-1 encoded, so each charCodeAt is a byte (8 bit).
-  const u8 = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  return Array.prototype.map
-    .call(u8, (b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-export function accessKeys() {
-  if (!envManager) return "";
-
-  return envManager.get("ACCESS_KEYS") || null;
+export function requiresHeaderAuth() {
+  return globalThis.envManager?.get("ACCESS_KEYS") != null;
 }
 
 export function forceDoh() {
@@ -381,8 +262,7 @@ export function forceDoh() {
   // on other runtimes, continue using doh
   if (!isNode()) return true;
 
-  // on node, default to using plain old dns
-  return envManager.get("NODE_DOH_ONLY") || false;
+  return envManager.get("NODE_DOH_ONLY");
 }
 
 export function disableDnsCache() {
@@ -400,64 +280,13 @@ export function disableBlocklists() {
 }
 
 export function blockSubdomains() {
-  if (!envManager) return true;
-
-  return envManager.get("BLOCK_SUBDOMAINS") || true;
+  return globalThis.envManager?.get("BLOCK_SUBDOMAINS") ?? true;
 }
 
 // recurisve resolver on Fly
 // see: node/config.js#prep
 export function recursive() {
   return onFly();
-}
-
-export function logpushEnabled() {
-  if (!envManager) return false;
-
-  return envManager.get("LOGPUSH_ENABLED") || false;
-}
-
-export function logpushHostnameAsLogid() {
-  if (!envManager) return false;
-
-  return envManager.get("LOGPUSH_HOSTNAME_AS_LOGID") || false;
-}
-
-// returns a set of subdomains on which logpush is enabled
-export function logpushSources() {
-  if (!envManager) return null;
-
-  const csv = envManager.get("LOGPUSH_SRC") || null;
-  if (onCloudflare() || onLocal()) return csv;
-
-  return null;
-}
-
-export function logpushPath() {
-  if (!envManager) return "";
-
-  const path = envManager.get("CF_LOGPUSH_R2_PATH") || "";
-  if (onCloudflare() || onLocal()) return path;
-
-  return "";
-}
-
-export function logpushAccessKey() {
-  if (!envManager) return "";
-
-  const accesskey = envManager.get("CF_LOGPUSH_R2_ACCESS_KEY") || "";
-  if (onCloudflare() || onLocal()) return accesskey;
-
-  return "";
-}
-
-export function logpushSecretKey() {
-  if (!envManager) return "";
-
-  const secretkey = envManager.get("CF_LOGPUSH_R2_SECRET_KEY") || "";
-  if (onCloudflare() || onLocal()) return secretkey || "";
-
-  return "";
 }
 
 export function gwip4() {
@@ -473,20 +302,4 @@ export function gwip6() {
 export function region() {
   if (!envManager) return "";
   return envManager.get("FLY_REGION") || "";
-}
-
-export function metrics() {
-  const nobinding = [null, null];
-
-  if (!envManager) return nobinding;
-
-  // match the binding names as in wrangler.toml
-  if (onCloudflare()) {
-    return [
-      envManager.get("METRICS") || null,
-      envManager.get("BL_METRICS") || null,
-    ];
-  }
-
-  return nobinding;
 }

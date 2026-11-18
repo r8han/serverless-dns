@@ -1,45 +1,19 @@
-# Based on github.com/denoland/deno_docker/blob/main/alpine.dockerfile
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS setup
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --omit=dev --omit=optional
+COPY scripts/ scripts/
+COPY config/blocklist-manifest.json config/
+COPY src/ src/
+COPY deno.lock import_map.json LICENSE ./
+RUN node scripts/runtime-binary.mjs deno && sh scripts/prepare.sh --assets && node scripts/stage-deno.mjs release && cd release && deno cache --no-remote --no-npm --frozen src/server-deno.ts
 
-ARG DENO_VERSION=1.44.4
-ARG BIN_IMAGE=denoland/deno:bin-${DENO_VERSION}
-
-FROM ${BIN_IMAGE} AS bin
-
-FROM frolvlad/alpine-glibc:alpine-3.13
-
-RUN apk --no-cache add ca-certificates
-
-RUN addgroup --gid 1000 deno \
-  && adduser --uid 1000 --disabled-password deno --ingroup deno \
-  && mkdir /deno-dir/ \
-  && chown deno:deno /deno-dir/
-
-ENV DENO_DIR /deno-dir/
-ENV DENO_INSTALL_ROOT /usr/local
-
-ARG DENO_VERSION
-ENV DENO_VERSION=${DENO_VERSION}
-COPY --from=bin /deno /bin/deno
-
-WORKDIR /deno-dir
-COPY . .
-
-# runs pre-build step which fetchs the latest basicconfig
-RUN src/build/pre.sh
-RUN ls -Fla
-
-ENTRYPOINT ["/bin/deno"]
-
-# Unstable API for 'Deno.listenTls#alpn_protocols'
-# This is only used while building, on fly.io
-CMD [
-  "run",
-  "--unstable",
-  "--allow-net",
-  "--allow-env",
-  "--allow-read",
-  "src/server-deno.ts"
-]
-
-# Run port process as a root privilege user. For say port 53
-# USER root
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+ENV DENO_DIR=/tmp/deno-cache DENO_ENV_DOMAIN=production DENO_NO_UPDATE_CHECK=1
+WORKDIR /app
+COPY --from=setup /usr/local/bin/deno /usr/local/bin/deno
+COPY --from=setup /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=setup /app/release/ ./
+COPY --from=setup /app/blocklists__ ./blocklists__/
+USER 65532:65532
+CMD ["deno", "run", "--frozen", "--no-remote", "--no-npm", "--allow-env", "--allow-net", "--allow-read=/app,/run/secrets", "src/server-deno.ts"]

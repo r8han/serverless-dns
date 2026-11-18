@@ -9,6 +9,12 @@
 // env config at top, so if .env file variables are used, it is available to
 // other modules.
 import "./core/deno/config.ts";
+import {
+  listenerPolicy,
+  validateIdentity,
+} from "./core/node/listener-policy.js";
+import { readFrame } from "./commons/dns-frame.js";
+import { unstamp } from "./plugins/rdns-util.js";
 import { handleRequest } from "./core/doh.js";
 import { stopAfter, uptime } from "./core/svc.js";
 import * as system from "./system.js";
@@ -22,7 +28,10 @@ let log: any = null;
 let listeners: Array<any> = [];
 
 ((main) => {
-  system.sub("go", systemUp);
+  system.when("go").then(systemUp).catch(() => {
+    console.error("listener startup failed");
+    Deno.exit(1);
+  });
   system.sub("stop", systemDown);
   // ask prepare phase to commence
   system.pub("prepare");
@@ -68,34 +77,46 @@ function systemUp() {
   }
 
   const abortctl = new AbortController();
-  const onDenoDeploy = envutil.onDenoDeploy() as boolean;
-  const isCleartext = envutil.isCleartext() as boolean;
-  const dohConnOpts = { port: envutil.dohBackendPort() };
-  const dotConnOpts = { port: envutil.dotBackendPort() };
-  const sigOpts = {
-    signal: abortctl.signal,
-    onListen: undefined,
+  const production = Deno.env.get("DENO_ENV_DOMAIN") === "production";
+  const policy = listenerPolicy({
+    production,
+    platform: Deno.env.get("CLOUD_PLATFORM"),
+    mode: Deno.env.get("TLS_MODE"),
+    tlsBind: Deno.env.get("TLS_BIND"),
+    privateBind: Deno.env.get("OFFLOAD_BIND") || Deno.env.get("FLY_PRIVATE_IP"),
+    managedDeno: !!Deno.env.get("DENO_DEPLOYMENT_ID"),
+  });
+  if (
+    (envManager?.get("TLS_OFFLOAD") && policy.mode !== "offload") ||
+    (production && envManager?.get("TLS_ALLOW_ANY_SNI"))
+  ) throw new Error("unsafe or conflicting TLS configuration");
+  const dotls = policy.mode === "terminate";
+  const dohConnOpts = {
+    hostname: policy.host,
+    port: policy.mode === "offload"
+      ? envutil.dohCleartextBackendPort()
+      : envutil.dohBackendPort(),
   };
-
-  // TODO: set TLS_KEY and TLS_CRT paths via env vars
-  const crtpath = envutil.tlsCrtPath() as string;
-  const keypath = envutil.tlsKeyPath() as string;
-  const dotls = !onDenoDeploy && !isCleartext;
-
+  const dotConnOpts = { hostname: policy.host, port: envutil.dotBackendPort() };
+  const sigOpts = { signal: abortctl.signal };
   const tlsOpts = dotls
     ? {
-        // docs.deno.com/runtime/reference/migration_guide/
-        cert: Deno.readTextFileSync(crtpath),
-        key: Deno.readTextFileSync(keypath),
-      }
+      cert: Deno.readTextFileSync(envutil.tlsCrtPath() as string),
+      key: Deno.readTextFileSync(envutil.tlsKeyPath() as string),
+    }
     : { cert: "", key: "" };
-  // deno.land/manual@v1.18.0/runtime/http_server_apis_low_level
-  const httpOpts = {
-    alpnProtocols: ["h2", "http/1.1"],
-  };
-
+  if (dotls) validateIdentity(tlsOpts.key, tlsOpts.cert, production);
+  // Deno's connection API doesn't supply policy-bearing SNI. No silent
+  // fallback: DoT requires an explicitly fixed public listener policy.
+  const fixed = Deno.env.get("DOT_POLICY");
+  if (fixed && fixed !== "none") unstamp(fixed);
   startDoh();
-  startDotIfPossible();
+  startDotIfPossible().catch(() => {
+    if (!abortctl.signal.aborted) {
+      log.e("DoT listener failed");
+      Deno.exit(1);
+    }
+  });
 
   // docs.deno.com/runtime/fundamentals/http_server
   // docs.deno.com/api/deno/~/Deno.serve
@@ -105,10 +126,9 @@ function systemUp() {
         {
           ...dohConnOpts,
           ...tlsOpts,
-          ...httpOpts,
           ...sigOpts,
         },
-        serveDoh
+        serveDoh,
       );
     } else {
       Deno.serve({ ...dohConnOpts, ...sigOpts }, serveDoh);
@@ -119,22 +139,23 @@ function systemUp() {
 
   async function startDotIfPossible() {
     // No DoT on Deno Deploy which supports only http workloads
-    if (onDenoDeploy) return;
+    if (!dotls || !fixed || envutil.requiresHeaderAuth()) return;
 
     // doc.deno.land/deno/stable/~/Deno.listenTls
     // doc.deno.land/deno/stable/~/Deno.listen
-    const dot = terminateTls()
-      ? Deno.listenTls({ ...dotConnOpts, ...tlsOpts })
-      : Deno.listen({ ...dotConnOpts });
+    const dot = Deno.listenTls({ ...dotConnOpts, ...tlsOpts });
 
-    up("DoT (no blocklists)", dot, dotConnOpts);
-
-    // deno.land/manual@v1.11.3/runtime/http_server_apis#handling-connections
+    up("DoT (fixed policy)", dot, dotConnOpts);
+    let active = 0;
     for await (const conn of dot) {
-      log.d("DoT conn:", conn.remoteAddr);
-
-      // to not block the server and accept further conns, do not await
-      serveTcp(conn);
+      if (active >= 64) {
+        conn.close();
+        continue;
+      }
+      active++;
+      serveTcp(conn, fixed).catch(() => {}).finally(() => {
+        active--;
+      });
     }
   }
 
@@ -145,92 +166,77 @@ function systemUp() {
   }
 
   function terminateTls() {
-    if (onDenoDeploy) return false;
-    if (envutil.isCleartext() as boolean) return false;
-    if (util.emptyString(tlsOpts.key)) return false;
-    if (util.emptyString(tlsOpts.cert)) return false;
-    return true;
+    return dotls;
   }
 }
 
-function serveDoh(req: Request) {
+async function serveDoh(req: Request) {
   try {
     // doc.deno.land/deno/stable/~/Deno.RequestEvent
     // deno.land/manual/runtime/http_server_apis#http-requests-and-responses
-    return handleRequest(util.mkFetchEvent(req));
+    return await handleRequest(util.mkFetchEvent(req));
   } catch (e) {
     // Client may close conn abruptly before a response could be sent
-    log.w("doh fail", e);
-    return util.respond405();
+    log.w("DoH request failed");
+    return new Response(null, {
+      status: 503,
+      headers: { "cache-control": "private, no-store" },
+    });
   }
 }
 
-async function serveTcp(conn: Deno.Conn) {
-  // TODO: Sync this impl with serveTcp in server-node.js
-  const qlBuf = new Uint8Array(2);
-
-  while (true) {
-    let n = null;
-
+async function serveTcp(conn: Deno.Conn, policy: string) {
+  const close = () => {
     try {
-      n = await conn.read(qlBuf);
-    } catch (e) {
-      log.w("err tcp query read", e);
-      break;
-    }
-
-    if (n == 0 || n == null) {
-      log.d("tcp socket clean shutdown");
-      break;
-    }
-
-    // TODO: use dnsutil.validateSize instead
-    if (n < 2) {
-      log.w("query too small");
-      break;
-    }
-
-    const ql = new DataView(qlBuf.buffer).getUint16(0);
-    log.d(`Read ${n} octets; q len = ${qlBuf} = ${ql}`);
-
-    const q = new Uint8Array(ql);
-    n = await conn.read(q);
-    log.d(`Read ${n} length q`);
-
-    if (n != ql) {
-      log.w(`query len mismatch: ${n} < ${ql}`);
-      break;
-    }
-
-    // TODO: Parallel processing
-    await handleTCPQuery(q, conn);
-  }
-
-  // TODO: expect client to close the connection; timeouts.
-  conn.close();
-}
-
-async function handleTCPQuery(q: Uint8Array, conn: Deno.Conn) {
+      conn.close();
+    } catch { /* already closed */ }
+  };
+  const ctl = new AbortController();
   try {
-    const r = await resolveQuery(q);
-    const rlBuf = bufutil.encodeUint8ArrayBE(r.byteLength, 2);
-
-    const n = await conn.write(new Uint8Array([...rlBuf, ...r]));
-    if (n != r.byteLength + 2) {
-      log.e(`res write incomplete: ${n} < ${r.byteLength + 2}`);
+    for (;;) {
+      // Absolute per-frame deadline includes reads, resolve and partial writes.
+      const timer = setTimeout(() => {
+        ctl.abort();
+        close();
+      }, dnsutil.requestTimeout());
+      try {
+        const q = await readFrame(conn);
+        if (!q) break;
+        const r = await resolveQuery(q, policy, ctl.signal);
+        if (!r.length) break;
+        const bytes = new Uint8Array([r.length >> 8, r.length & 255, ...r]);
+        for (let i = 0; i < bytes.length;) {
+          const n = await conn.write(bytes.subarray(i));
+          if (!n) throw new Error("short write");
+          i += n;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
     }
-  } catch (e) {
-    log.w("err tcp query resolve", e);
+  } finally {
+    ctl.abort();
+    close();
   }
 }
 
-async function resolveQuery(q: Uint8Array) {
-  // TODO: Sync code with server-node.js:resolveQuery
-  const freq: Request = new Request("https://ignored.example.com", {
-    method: "POST",
-    headers: util.concatHeaders(util.dnsHeaders(), util.contentLengthHeader(q)),
-    body: q,
-  });
+async function resolveQuery(
+  q: Uint8Array,
+  policy: string,
+  signal: AbortSignal,
+) {
+  const freq = new Request(
+    "https://dot.invalid/" + (policy === "none" ? "dns-query" : policy),
+    {
+      method: "POST",
+      headers: util.concatHeaders(
+        util.dnsHeaders(),
+        util.contentLengthHeader(q),
+      ),
+      body: new Uint8Array(q),
+      signal,
+    },
+  );
 
   const r = await handleRequest(util.mkFetchEvent(freq));
 
