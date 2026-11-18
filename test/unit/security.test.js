@@ -9,7 +9,10 @@ import { fixture, fixtureMetadata } from "./fixture.js";
 import * as dns from "../../src/commons/dnsutil.js";
 import { readBounded, readIncoming } from "../../src/commons/bounded.js";
 import { readFrame } from "../../src/commons/dns-frame.js";
-import { fetchArtifact } from "../../src/commons/blocklist-integrity.js";
+import {
+  digest,
+  fetchArtifact,
+} from "../../src/commons/blocklist-integrity.js";
 import { fromStr, hex2buf } from "../../src/commons/bufutil.js";
 import { svckeys, hmacverify } from "../../src/commons/crypto.js";
 import {
@@ -522,6 +525,7 @@ test("history and analytics are opt-in and scoped to structured tenant-owned rec
     LOGPUSH_SRC: host,
     LOGPUSH_HISTORY: "true",
     LOGPUSH_ANALYTICS: "true",
+    LOGPUSH_ANSWER_COUNTRY: "true",
   });
   const store = new Map();
   const get = t.mock.fn(async (k) => {
@@ -538,11 +542,14 @@ test("history and analytics are opt-in and scoped to structured tenant-owned rec
   wenv.DNS_HISTORY = { get, list, put: async (k, v) => store.set(k, v) };
   const bg = [];
   const lp = new LogPusher();
+  const lookup = t.mock.method(lp.geo, "country", async () => "IN");
   const principal = (scope, partition) => ({ ok: true, scope, partition });
   const row = {
     isDnsMsg: true,
     request: request("/l:two"),
     requestDecodedDnsPacket: q,
+    responseDecodedDnsPacket: { answers: [a] },
+    responseBodyBuffer: response([a]),
     dispatcher: (p) => bg.push(p),
     userAuth: principal("write", "one"),
   };
@@ -553,12 +560,27 @@ test("history and analytics are opt-in and scoped to structured tenant-owned rec
   assert.equal(metric.mock.callCount(), 0);
   wenv.LOGPUSH_ENABLED = "true";
   await lp.exec({ ...row, request: new Request("https://not" + host + "/") });
+  for (const auth of [
+    principal("read", "one"),
+    principal("dns", "one"),
+    principal("write", undefined),
+  ]) {
+    await lp.exec({ ...row, userAuth: auth });
+  }
+  assert.equal(lookup.mock.callCount(), 0);
   assert.equal(store.size, 0);
   await lp.exec(row);
   await lp.exec({ ...row, userAuth: principal("write", "two") });
   await Promise.all(bg);
   assert.equal(store.size, 2);
-  assert.equal(metric.mock.callCount(), 2);
+  assert.equal(lookup.mock.callCount(), 2);
+  assert.deepEqual(
+    metric.mock.calls.map((c) => c.arguments[0]),
+    ["one", "two"].map((tenant) => ({
+      indexes: [tenant],
+      blobs: ["A", "answered", "IN"],
+    }))
+  );
   const read = (auth, url = "/logs") => lp.read("logs", request(url), auth);
   const reader = principal("read", "one");
   assert.equal((await read(reader)).status, 403);
@@ -613,6 +635,159 @@ test("history and analytics are opt-in and scoped to structured tenant-owned rec
       `SELECT ${col} AS category, SUM(_sample_interval) AS n FROM SDNS_EVENTS_V2 WHERE index1 = 'one' AND timestamp > NOW() - INTERVAL '30' MINUTE GROUP BY category ORDER BY n DESC LIMIT 10 FORMAT JSON`
     );
   }
+});
+
+test("answer-country metrics follow the served answer, not the requester or an upstream hidden by policy", async (t) => {
+  const table = Uint8Array.from([192, 0, 2, 0, 73, 78, 203, 0, 113, 0, 78, 90]); // IN / NZ
+  const points = [];
+  const history = [];
+  env(t, {
+    ACCESS_KEYS: (await verifier(key, host)) + "|one|write",
+    LOGPUSH_ENABLED: "true",
+    LOGPUSH_SRC: host,
+    LOGPUSH_HISTORY: "true",
+    LOGPUSH_ANALYTICS: "true",
+    DNS_HISTORY: { put: async (_, data) => history.push(JSON.parse(data)) },
+    METRICS: { writeDataPoint: (point) => points.push(point) },
+    GW_IP4: "203.0.113.8",
+    GW_IP6: "2001:db8::1",
+    GEOIP_URL: "https://geo.example/revision/",
+    GEOIP_V4_PIN: `${table.length}:${await digest(table)}`,
+  });
+  globalThis.caches = {
+    default: { match: async () => undefined, put: async () => {} },
+  };
+  const bw = new BlocklistWrapper();
+  await bw.install(binary(fixture.td), binary(fixture.rd));
+  configureServices(t, bw);
+  const bg = [];
+  let upstream = 0;
+  let downloads = 0;
+  const pending = Promise.withResolvers();
+  t.mock.method(globalThis, "fetch", async (req) => {
+    if (
+      req instanceof URL &&
+      req.href === "https://geo.example/revision/dbip.v4"
+    ) {
+      downloads++;
+      return (await pending.promise).clone();
+    }
+    upstream++;
+    const query = dns.decodeQuery(await req.arrayBuffer());
+    return new Response(
+      dns.encode({
+        id: query.id,
+        questions: query.questions,
+        type: "response",
+        answers: [a],
+      })
+    );
+  });
+  async function send(path) {
+    const res = await handleRequest({
+      request: request(path, {
+        method: "POST",
+        body: query,
+        headers: {
+          "content-type": "application/dns-message",
+          "cf-connecting-ip": "203.0.113.99",
+          "authorization": "Bearer " + key,
+        },
+      }),
+      waitUntil: (p) => bg.push(p),
+    });
+    assert.equal(res.status, 200);
+    return dns.decode(await res.arrayBuffer()).answers[0].data;
+  }
+  assert.equal(await send("/dns-query"), a.data);
+  await Promise.all(bg);
+  assert.equal(downloads, 0); // explicit extra opt-in even for an authorized writer
+  wenv.LOGPUSH_ANSWER_COUNTRY = "true";
+  assert.equal(await send("/1:AIAAgA"), "0.0.0.0");
+  assert.equal(downloads, 0);
+  assert.equal(await send("/dns-query"), a.data); // DNS finished while table fetch is still pending
+  assert.equal(downloads, 1);
+  pending.resolve(new Response(table));
+  await Promise.all(bg);
+  assert.equal(await send("/gateway"), "203.0.113.8");
+  await Promise.all(bg);
+  // A rotation with the wrong digest must keep the ordinary metric and reply,
+  // not keep reporting from the previously approved generation.
+  wenv.GEOIP_V4_PIN = `${table.length}:${"0".repeat(64)}`;
+  assert.equal(await send("/dns-query"), a.data);
+  await Promise.all(bg);
+  assert.equal(upstream, 1); // cache hits are measured after gateway/policy decisions too
+  assert.equal(downloads, 2);
+  assert.deepEqual(
+    points,
+    [
+      ["A", "answered"],
+      ["A", "blocked"],
+      ["A", "answered", "IN"],
+      ["A", "answered", "NZ"],
+      ["A", "answered"],
+    ].map((blobs) => ({ indexes: ["one"], blobs }))
+  );
+  assert.equal(history.length, 5);
+  for (const row of history) {
+    assert.deepEqual(Object.keys(row).sort(), [
+      "result",
+      "tenant",
+      "time",
+      "type",
+    ]);
+  }
+});
+
+test("country report is opt-in, requires the tenant read grant and only returns country/count pairs", async (t) => {
+  env(t, {
+    OBSERVABILITY_READS: "true",
+    CF_ACCOUNT_ID: "c".repeat(32),
+    CF_ANALYTICS_READ_TOKEN: "fixture",
+  });
+  const lp = new LogPusher();
+  const read = (scope, search = "?f=country", partition = "one") =>
+    lp.read("analytics", request("/analytics" + search), {
+      ok: true,
+      scope,
+      partition,
+    });
+  let category = "IN";
+  const partitions = [];
+  const provider = t.mock.method(globalThis, "fetch", (_, opts) => {
+    assert.match(opts.body, /SELECT blob3 AS category/);
+    const tenant =
+      /WHERE index1 = '(one|two)' AND blob3 != '' AND timestamp/.exec(
+        opts.body
+      )?.[1];
+    assert.ok(tenant);
+    partitions.push(tenant);
+    return Response.json({
+      data: [
+        {
+          category: tenant === "one" ? category : "DE",
+          n: "2",
+          private: "not exported",
+        },
+      ],
+    });
+  });
+  assert.equal((await read("read")).status, 400);
+  wenv.LOGPUSH_ANSWER_COUNTRY = "true";
+  assert.equal((await read("write")).status, 403);
+  assert.equal((await read("read", "?f=country&tenant=other")).status, 400);
+  assert.equal(provider.mock.callCount(), 0);
+  const res = await read("read");
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
+  assert.deepEqual(await res.json(), [{ category: "IN", n: 2 }]);
+  assert.deepEqual(await (await read("read", "?f=country", "two")).json(), [
+    { category: "DE", n: 2 },
+  ]);
+  assert.deepEqual(partitions, ["one", "two"]);
+  category = "192.0.2.9";
+  const invalid = await read("read");
+  assert.equal(invalid.status, 502);
+  assert.equal(await invalid.text(), "");
 });
 
 test("EDNS keeps DO, advertised size and non-ECS bytes; options bypass shared answer storage", (t) => {

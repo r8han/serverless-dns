@@ -109,21 +109,14 @@ export default class RethinkPlugin {
       "logpush",
       services.logPusher,
       [
-        "rxid",
         "userAuth",
         "isDnsMsg",
         "dispatcher",
         "request",
-        // resolver-url overriden by user-op, may be null
-        "userDnsResolverUrl",
-        // may be missing if req isn't a dns query
         "requestDecodedDnsPacket",
-        // may be missing in case of exceptions or blocked answers
         "responseDecodedDnsPacket",
-        // may be missing in case the dns query isn't blocked
-        "blockflag",
-        // only valid on platforms, fly and cloudflare
-        "region",
+        "responseBodyBuffer",
+        "isBlocked",
       ],
       util.stubAsync, // no callback
       true, // always exec this plugin
@@ -233,6 +226,7 @@ export default class RethinkPlugin {
       this.log.w(rxid, "prefilter error");
       this.loadException(rxid, response, io);
     } else if (deny) {
+      this.addCtx("isBlocked", true);
       io.dnsNxDomainResponse(r.flag);
     } else {
       this.log.d(rxid, "prefilter no-op");
@@ -255,14 +249,11 @@ export default class RethinkPlugin {
     if (response.isException) {
       this.loadException(rxid, response, io);
     } else if (deny) {
-      this.addCtx("blockflag", r.flag);
+      this.addCtx("isBlocked", true);
       // TODO: create block packets/buffers in dnsBlocker.js
       io.dnsBlockResponse(r.flag);
     } else if (isAns) {
-      this.addCtx("responseBodyBuffer", r.dnsBuffer);
-      this.addCtx("responseDecodedDnsPacket", r.dnsPacket);
-      this.addCtx("blockflag", r.flag);
-      io.dnsResponse(r.dnsBuffer, r.dnsPacket, r.flag);
+      this.deliverAnswer(r, io);
     } else {
       this.addCtx("domainBlockstamp", r.stamps);
       this.log.d(rxid, "resolve query; no response from cache-handler");
@@ -270,8 +261,6 @@ export default class RethinkPlugin {
   }
 
   /**
-   * Adds "responseBodyBuffer" (arrayBuffer of dns response from upstream
-   * resolver) to RethinkPlugin ctx
    * @param {RResp} response
    * @param {IOState} io
    */
@@ -288,16 +277,13 @@ export default class RethinkPlugin {
 
     if (deny) {
       // TODO: create block packets/buffers in dnsBlocker.js?
-      this.addCtx("blockflag", r.flag);
+      this.addCtx("isBlocked", true);
       io.dnsBlockResponse(r.flag);
     } else if (response.isException || !isAns) {
       // if not blocked, but then, no-ans or is-exception, then:
       this.loadException(rxid, response, io);
     } else {
-      this.addCtx("responseBodyBuffer", r.dnsBuffer);
-      this.addCtx("responseDecodedDnsPacket", r.dnsPacket);
-      this.addCtx("blockflag", r.flag);
-      io.dnsResponse(r.dnsBuffer, r.dnsPacket, r.flag);
+      this.deliverAnswer(r, io);
     }
   }
 
@@ -310,6 +296,14 @@ export default class RethinkPlugin {
   loadException(rxid, response, io) {
     this.log.w(rxid, "plugin failed");
     io.dnsExceptionResponse(response);
+  }
+
+  deliverAnswer(r, io) {
+    const wire = io.dnsResponse(r.dnsBuffer, r.dnsPacket, r.flag);
+    // Telemetry sees the response after policy and gateway rewriting, never
+    // an upstream address that was withheld from the client.
+    this.addCtx("responseBodyBuffer", wire);
+    this.addCtx("responseDecodedDnsPacket", io.decodedDnsPacket);
   }
 
   /**

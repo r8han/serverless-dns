@@ -95,7 +95,7 @@ export default class IOState {
 
   /**
    * @param {ArrayBuffer} arrayBuffer - responseBodyBuffer
-   * @returns Web API Response
+   * @returns {ArrayBuffer|undefined} Bytes actually served, including gateway rewrites.
    */
   dnsResponse(arrayBuffer, dnsPacket = null, blockflag = null) {
     if (bufutil.emptyBuf(arrayBuffer)) {
@@ -119,6 +119,7 @@ export default class IOState {
     this.httpResponse = new Response(arrayBuffer, {
       headers: this.headers(arrayBuffer),
     });
+    return arrayBuffer;
   }
 
   dnsBlockResponse(blockflag) {

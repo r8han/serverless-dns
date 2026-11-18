@@ -7,6 +7,8 @@ import {
   openResponse,
 } from "../../commons/cancel.js";
 import { readBounded } from "../../commons/bounded.js";
+import { firstAnswerAddress } from "../../commons/dns-wire.js";
+import { GeoIP, validCountry } from "./geoip.js";
 import { validPartition } from "../users/auth-token.js";
 import * as pres from "../plugin-response.js";
 
@@ -14,12 +16,13 @@ const privateHeaders = {
   "cache-control": "private, no-store",
   "referrer-policy": "no-referrer",
 };
-const fields = new Map([
-  ["type", "blob1"],
-  ["result", "blob2"],
-]);
 const typeOK = (s) => typeof s === "string" && /^[A-Z0-9_]{1,16}$/.test(s);
 const resultOK = (s) => ["blocked", "answered", "negative"].includes(s);
+const fields = new Map([
+  ["type", { column: "blob1", valid: typeOK }],
+  ["result", { column: "blob2", valid: resultOK }],
+  ["country", { column: "blob3", valid: validCountry }],
+]);
 const deny = (status) =>
   new Response(null, { status, headers: privateHeaders });
 const json = (data) => Response.json(data, { headers: privateHeaders });
@@ -34,9 +37,11 @@ function integer(s, min, max) {
 
 // The provider does not support bound SQL parameters. Only configuration-
 // validated identifiers, principal-derived partitions and integers enter SQL.
-export function reportQuery(dataset, tenant, params) {
+export function reportQuery(dataset, tenant, params, allowCountry = false) {
   if (
+    typeof dataset !== "string" ||
     !/^[A-Za-z][A-Za-z0-9_]{0,62}$/.test(dataset) ||
+    typeof tenant !== "string" ||
     !validPartition.test(tenant)
   ) {
     throw new Error("invalid analytics configuration");
@@ -46,14 +51,35 @@ export function reportQuery(dataset, tenant, params) {
       throw new Error("invalid report option");
     }
   }
-  const col = fields.get(params.get("f") ?? "result");
-  if (!col) throw new Error("unknown report field");
+  const field = params.get("f") ?? "result";
+  const col = fields.get(field)?.column;
+  if (!col || (field === "country" && !allowCountry)) {
+    throw new Error("unknown report field");
+  }
+  // Pre-feature, disabled and unclassified events have no third blob.
+  const present = field === "country" ? " AND blob3 != ''" : "";
   const minutes = integer(params.get("t") ?? "30", 1, 60);
   const limit = integer(params.get("l") ?? "10", 1, 32);
-  return `SELECT ${col} AS category, SUM(_sample_interval) AS n FROM ${dataset} WHERE index1 = '${tenant}' AND timestamp > NOW() - INTERVAL '${minutes}' MINUTE GROUP BY category ORDER BY n DESC LIMIT ${limit} FORMAT JSON`;
+  return `SELECT ${col} AS category, SUM(_sample_interval) AS n FROM ${dataset} WHERE index1 = '${tenant}'${present} AND timestamp > NOW() - INTERVAL '${minutes}' MINUTE GROUP BY category ORDER BY n DESC LIMIT ${limit} FORMAT JSON`;
 }
 
 export class LogPusher {
+  geo = new GeoIP();
+
+  async writeMetric(metrics, tenant, type, result, wire, env) {
+    const blobs = [type, result];
+    if (result === "answered" && env.get("LOGPUSH_ANSWER_COUNTRY")) {
+      try {
+        const country = await this.geo.country(firstAnswerAddress(wire), env);
+        if (country) blobs.push(country);
+      } catch {
+        // An unavailable table or unclassifiable answer must not lose the
+        // ordinary type/result metric, let alone interfere with resolution.
+      }
+    }
+    return metrics.writeDataPoint({ indexes: [tenant], blobs });
+  }
+
   // No raw query, IP, answer, credential, URL, free-form log id or console
   // output, even when opted in. The write credential determines the partition.
   async exec(ctx) {
@@ -65,14 +91,15 @@ export class LogPusher {
       !env.get("LOGPUSH_ENABLED") ||
       auth?.scope !== "write" ||
       !auth.ok ||
+      typeof auth.partition !== "string" ||
       !validPartition.test(auth.partition) ||
       !env.get("LOGPUSH_SRC")?.has(new URL(ctx.request.url).hostname)
     ) {
       return out;
     }
-    const type = ctx.requestDecodedDnsPacket?.questions[0]?.type;
+    const type = ctx.requestDecodedDnsPacket?.questions?.[0]?.type;
     if (!typeOK(type)) return out;
-    const result = ctx.blockflag
+    const result = ctx.isBlocked
       ? "blocked"
       : ctx.responseDecodedDnsPacket?.answers?.length
       ? "answered"
@@ -80,11 +107,17 @@ export class LogPusher {
     const tenant = auth.partition;
     const time = Date.now();
     const bindings = globalThis.wenv;
-    if (env.get("LOGPUSH_ANALYTICS")) {
-      bindings?.METRICS?.writeDataPoint({
-        indexes: [tenant],
-        blobs: [type, result],
-      });
+    if (env.get("LOGPUSH_ANALYTICS") && bindings?.METRICS) {
+      ctx.dispatcher(
+        this.writeMetric(
+          bindings.METRICS,
+          tenant,
+          type,
+          result,
+          ctx.responseBodyBuffer,
+          env
+        ).catch(() => {})
+      );
     }
     if (env.get("LOGPUSH_HISTORY") && bindings?.DNS_HISTORY) {
       const data = JSON.stringify({ tenant, time, type, result });
@@ -155,7 +188,12 @@ export class LogPusher {
       if (command !== "analytics") return deny(404);
       let sql;
       try {
-        sql = reportQuery(env.get("ANALYTICS_DATASET"), tenant, p);
+        sql = reportQuery(
+          env.get("ANALYTICS_DATASET"),
+          tenant,
+          p,
+          env.get("LOGPUSH_ANSWER_COUNTRY")
+        );
       } catch {
         return deny(400);
       }
@@ -183,10 +221,11 @@ export class LogPusher {
       const raw = await readBounded(res, 16384, signal);
       const rows = JSON.parse(new TextDecoder().decode(raw)).data;
       if (!Array.isArray(rows) || rows.length > 32) return deny(502);
+      const validCategory = fields.get(p.get("f") ?? "result").valid;
       return json(
         rows.map(({ category, n }) => {
           if (
-            !(p.get("f") === "type" ? typeOK(category) : resultOK(category)) ||
+            !validCategory(category) ||
             !Number.isSafeInteger(Number(n)) ||
             Number(n) < 0
           ) {

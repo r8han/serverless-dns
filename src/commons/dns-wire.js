@@ -12,7 +12,7 @@ function requireWire(ok) {
   if (!ok) throw new Error("invalid DNS message");
 }
 
-export function inspect(bytes, queryOnly = false) {
+export function inspect(bytes, queryOnly = false, onAnswerAddress = null) {
   requireWire(bytes?.byteLength >= 17 && bytes.byteLength <= maxSize);
   const b = ArrayBuffer.isView(bytes)
     ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -135,6 +135,7 @@ export function inspect(bytes, queryOnly = false) {
       } else if (code === 1 || code === 28) {
         requireWire(length === (code === 1 ? 4 : 16));
         rr.data = ip.toString(b, pos, length);
+        if (section === 0) onAnswerAddress?.(b, pos, length);
       } else if ([2, 5, 12, 39].includes(code)) {
         rr.data = name(end);
         requireWire(pos === end);
@@ -159,6 +160,13 @@ export function inspect(bytes, queryOnly = false) {
           if (key === 4 || key === 6) {
             const width = key === 4 ? 4 : 16;
             requireWire(size > 0 && size % width === 0);
+            if (
+              section === 0 &&
+              svcPriority > 0 &&
+              rr.data.targetName === "."
+            ) {
+              onAnswerAddress?.(b, pos, width); // first hint in this SvcParam
+            }
             const hints = [];
             for (let k = 0; k < size; k += width) {
               hints.push(ip.toString(b, pos + k, width));
@@ -176,4 +184,20 @@ export function inspect(bytes, queryOnly = false) {
   }
   requireWire(pos === b.length);
   return p;
+}
+
+// Return only validated address RDATA from the served Answer section. As in
+// the old metric, self-target service bindings can supply an IP hint; text,
+// aliases, glue and the requester's address never become a lookup key.
+export function firstAnswerAddress(wire) {
+  if (!wire) return null;
+  let address = null;
+  const packet = inspect(wire, false, (bytes, offset, width) => {
+    address ??= Uint8Array.from(bytes.subarray(offset, offset + width));
+  });
+  return packet.type === "response" &&
+    !packet.flag_tc &&
+    packet.rcode === "NOERROR"
+    ? address
+    : null;
 }

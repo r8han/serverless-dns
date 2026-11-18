@@ -157,6 +157,10 @@ const defaults = new Map(
     DOT_HAS_PROXY_PROTO: { type: "boolean", default: false },
     LOGPUSH_HISTORY: { type: "boolean", default: false },
     LOGPUSH_ANALYTICS: { type: "boolean", default: false },
+    LOGPUSH_ANSWER_COUNTRY: { type: "boolean", default: false },
+    GEOIP_URL: { type: "string", default: "" },
+    GEOIP_V4_PIN: { type: "string", default: "" },
+    GEOIP_V6_PIN: { type: "string", default: "" },
     OBSERVABILITY_READS: { type: "boolean", default: false },
     ANALYTICS_DATASET: { type: "string", default: "SDNS_EVENTS_V2" },
     LOGPUSH_ENABLED: {
