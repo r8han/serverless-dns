@@ -35,11 +35,31 @@ jobs:
         run: npm run build:fly && node test/listener-smoke.mjs node
       - if: matrix.target == 'worker'
         run: npm run build && node test/worker-smoke.mjs && ./node_modules/.bin/wrangler deploy --dry-run --env prod
-      - if: matrix.target == 'fastly'
+      - name: Compile the Fastly Wasm fixture
+        if: matrix.target == 'fastly'
+        run: npm run build:fastly 2>&1 | tee "$RUNNER_TEMP/fastly-build.log"
+        shell: bash
+      - name: Verify and extract Viceroy
+        if: matrix.target == 'fastly'
+        run: sh scripts/ci-tool.sh viceroy "$RUNNER_TEMP"
+      - name: Run the Wasm fixture in Viceroy
+        if: matrix.target == 'fastly'
+        run: node test/fastly-smoke.mjs "$RUNNER_TEMP/viceroy" 2>&1 | tee "$RUNNER_TEMP/fastly-smoke.log"
+        shell: bash
+      - name: Annotate fixture compiler or emulator errors
+        if: failure() && matrix.target == 'fastly'
         run: |
-          npm run build:fastly
-          sh scripts/ci-tool.sh viceroy "$RUNNER_TEMP"
-          node test/fastly-smoke.mjs "$RUNNER_TEMP/viceroy"
+          python3 - <<'PY'
+          import os, pathlib, re
+          for stage in ("build", "smoke"):
+              f = pathlib.Path(os.environ["RUNNER_TEMP"]) / f"fastly-{stage}.log"
+              if f.is_file():
+                  log = f.read_text(errors="replace")
+                  if re.search(r"error|panic|failed|trap|mismatch", log, re.I):
+                      tail = "\n".join(s[:500] for s in log.splitlines()[-32:])[-3800:]
+                      escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                      print(f"::error title=Fastly fixture {stage}::{escaped}")
+          PY
       - if: matrix.target == 'deno'
         uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: 2.5.6 }
