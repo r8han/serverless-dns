@@ -48,13 +48,12 @@ export default class IOState {
   gatewayAnswersOnly(ip4, ip6) {
     if (util.emptyString(ip4) || util.emptyString(ip6)) {
       this.alwaysGatewayAnswer = false;
-      this.log.w("none of the gw ans can be empty:", ip4, ip6);
+      this.log.w("gateway override requires both address families");
       return;
     }
     this.alwaysGatewayAnswer = true;
     this.gwip4 = ip4;
     this.gwip6 = ip6;
-    this.log.d("gateway ips set to", ip4, ip6);
   }
 
   emptyDecodedDnsPacket() {
@@ -278,7 +277,7 @@ export default class IOState {
 
   addData(ip4 = "0.0.0.0", ip6 = "::") {
     if (util.emptyString(ip4) && util.emptyString(ip6)) {
-      this.log.w("either ip4/ip6 to assign ans data", ip4, ip6);
+      this.log.w("missing address for synthetic answer");
       return false;
     }
     // TODO: move record-type checks (A/AAAA/SVCB) to dnsutil

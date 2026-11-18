@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Readable } from "node:stream";
+import { format } from "node:util";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
@@ -480,16 +481,21 @@ test("HTTP admission and cache provenance: reject nonqueries and bad policy, ret
   assert.equal(writes.size, 1);
 });
 
-test("all HTTP credential outcomes and retired enrollment routes are private; no secret or URL enters diagnostics", async (t) => {
-  const entry = await verifier(key, host);
-  env(t, { ACCESS_KEYS: entry });
+function captureDiagnostics(t) {
   const diagnostics = [];
   for (const level of ["log", "debug", "info", "warn", "error"]) {
     t.mock.method(console, level, (...args) =>
-      diagnostics.push(args.join(" "))
+      diagnostics.push(format(...args))
     );
   }
   setLogger(new Log({ level: "debug" }));
+  return diagnostics;
+}
+
+test("all HTTP credential outcomes and retired enrollment routes are private; no secret or URL enters diagnostics", async (t) => {
+  const entry = await verifier(key, host);
+  env(t, { ACCESS_KEYS: entry });
+  const diagnostics = captureDiagnostics(t);
   const bw = new BlocklistWrapper();
   const cache = configureServices(t, bw);
   void cache;
@@ -654,6 +660,7 @@ test("answer-country metrics follow the served answer, not the requester or an u
     GEOIP_URL: "https://geo.example/revision/",
     GEOIP_V4_PIN: `${table.length}:${await digest(table)}`,
   });
+  const diagnostics = captureDiagnostics(t);
   globalThis.caches = {
     default: { match: async () => undefined, put: async () => {} },
   };
@@ -728,6 +735,18 @@ test("answer-country metrics follow the served answer, not the requester or an u
       ["A", "answered"],
     ].map((blobs) => ({ indexes: ["one"], blobs }))
   );
+  assert.ok(diagnostics.length > 0);
+  const logs = diagnostics.join("\n");
+  for (const value of [
+    a.data,
+    a.name,
+    "203.0.113.99",
+    wenv.GW_IP4,
+    wenv.GW_IP6,
+    key,
+  ]) {
+    assert.ok(!logs.includes(value), "raw query data entered diagnostics");
+  }
   assert.equal(history.length, 5);
   for (const row of history) {
     assert.deepEqual(Object.keys(row).sort(), [
