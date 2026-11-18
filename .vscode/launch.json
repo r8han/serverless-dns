@@ -14,7 +14,7 @@
       "runtimeArgs": [
         "run",
         "--inspect",
-        "--frozen",
+        "--no-lock",
         "--allow-env",
         "--allow-net",
         "--allow-read",

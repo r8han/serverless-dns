@@ -1,6 +1,6 @@
 #### It's a bird, it's a plane, it's... a self-hosted, pi-hole esque, DNS resolver
 
-_serverless-dns_ is a Pi-Hole esque [content-blocking](https://github.com/serverless-dns/blocklists), serverless, stub DNS-over-HTTPS (DoH) and DNS-over-TLS (DoT) resolver. Targets [Cloudflare Workers](https://workers.dev), [Deno Deploy](https://deno.com/deploy), [Fastly Compute@Edge](https://www.fastly.com/products/edge-compute), and [Fly.io](https://fly.io/). Free tiers of all these services should be enough to cover 10 to 20 devices worth of DNS traffic per month.
+_serverless-dns_ is a Pi-Hole esque [content-blocking](https://github.com/serverless-dns/blocklists), serverless, stub DNS-over-HTTPS (DoH) and DNS-over-TLS (DoT) resolver. Primary targets are [Cloudflare Workers](https://workers.dev) and Node/Bun (including [Fly.io](https://fly.io/)). [Deno Deploy](https://deno.com/deploy) and [Fastly Compute](https://www.fastly.com/products/edge-compute) are optional. Free tiers of all these services should be enough to cover 10 to 20 devices worth of DNS traffic per month.
 
 ### The RethinkDNS resolver
 
@@ -45,10 +45,12 @@ For help or assistance, feel free to [open an issue](https://github.com/celzero/
 Use a supported Node LTS (CI: Node 22.22.3 and 24.22.3). From the repository root:
 
 ```sh
-npm ci --ignore-scripts
+npm install --no-package-lock --ignore-scripts
 npm test
 npm run lint
 ```
+
+No npm, Bun or Deno lockfile is checked in. Direct dependencies are pinned, but separate installs can resolve different transitive versions. `npm run audit:dependencies` checks the build’s npm resolution, or resolves in a temporary directory if no local lock exists.
 
 The tests use synthetic lists and mocked or loopback upstreams. They do not require a cloud account or production files. For an **offline fixture** bundle and Worker smoke in a disposable checkout:
 
@@ -63,6 +65,12 @@ npm run build:fly && node test/listener-smoke.mjs node
 ```
 
 Discard the disposable checkout and fixture after testing. Never set those two fixture variables on a release runner. `./run node|bun|deno|workers|fastly|fly` prepares trusted metadata before building or starting the respective service (Wrangler does so via its build command). Local Node/Bun/Deno termination defaults to loopback with the public test identity, **for development only**. Use `./run profile` for an offline CPU profile. See the [runtime test matrix](docs/security/rollout.md#release-gates).
+
+#### Optional deployments
+
+Pull requests run the unit, Node, Bun and Workers checks. For Fastly or Deno, use **Actions → PR checks → Run workflow** and select `fastly` or `deno`. These checks use fixtures and do not deploy. To build Fastly locally, first run `npm run setup:fastly`; the compiler is not installed by the root package. For Deno, use Deno 2.5.6; `node scripts/stage-deno.mjs release` needs prepared metadata, the root npm dependencies and access to the commit-pinned module sources. It stages a local-only release graph.
+
+The container release builds Node and Bun unless **include_deno** is selected. Managed Deno release is a separate manual workflow. Optional means not deployed by default; a selected target still needs its verification and approval gates.
 
 #### Filtering and forwarding
 
@@ -86,8 +94,8 @@ The program writes the bearer with mode `0600` and prints only a `host|verifier`
 | Target | Entrypoint | Configuration |
 |---|---|---|
 | Cloudflare Worker | `src/server-workers.js` | `wrangler.toml`; production `WORKER_ENV=production` |
-| Fastly Compute | `src/server-fastly.js` | `fastly.toml`, `env` Config Store, `FASTLY_ENV=production` |
-| Deno / Deno Deploy | `src/server-deno.ts` | `deno.json`, `import_map.json`, `deno.lock`, `DENO_ENV_DOMAIN=production` |
+| Fastly Compute (optional) | `src/server-fastly.js` | `fastly.toml`, `env` Config Store, `FASTLY_ENV=production` |
+| Deno / Deno Deploy (optional) | `src/server-deno.ts` | `deno.json`, `import_map.json`, `DENO_ENV_DOMAIN=production` |
 | Node / Bun | `src/server-node.js` | `NODE_ENV=production` / `BUN_ENV=production`, `fly.toml` or `fly.tls.toml` |
 
 For local termination use `TLS_MODE=terminate` and mount `TLS_KEY_PATH` / `TLS_CRT_PATH`. In production specify `CLOUD_PLATFORM=standalone` or `fly`. To offload TLS at a trusted gateway use `TLS_MODE=offload` with a private backend; **no** cleartext DoT substitute. Managed Deno requires `CLOUD_PLATFORM=deno-deploy`, `TLS_MODE=managed`, and a provider deployment ID. Stamps on Deno standalone DoT require a fixed `DOT_POLICY`. PSK is a separately provisioned Node TLS optimization, not DNS access control. Telemetry export and history reads are **off by default**. See the [migration, pinning and operator checklist](docs/security/rollout.md) before changing any of these settings.

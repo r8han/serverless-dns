@@ -1,4 +1,4 @@
-name: Release Deno Deploy sources
+name: Release Deno Deploy sources (optional)
 on: workflow_dispatch
 permissions: { contents: read }
 jobs:
@@ -12,8 +12,8 @@ jobs:
         with: { node-version: '24.22.3' }
       - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
         with: { deno-version: 2.5.6 }
-      - run: npm ci --ignore-scripts --omit=optional && npm run audit:dependencies && npm test && deno task prepare && node scripts/stage-deno.mjs release
-      - run: cd release && deno cache --no-remote --no-npm --frozen src/server-deno.ts
+      - run: npm install --package-lock --ignore-scripts --omit=optional && npm run audit:dependencies && npm test && deno task prepare && node scripts/stage-deno.mjs release
+      - run: cd release && deno cache --no-remote --no-npm --no-lock src/server-deno.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: deno-release

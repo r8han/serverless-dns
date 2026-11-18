@@ -42,7 +42,7 @@ const args =
         ...(process.env.DENO_APP_DIR
           ? ["--no-remote", "--no-npm"]
           : ["--cached-only"]),
-        "--frozen",
+        "--no-lock",
         "--config",
         resolve(denoApp, "deno.json"),
         "--allow-read",

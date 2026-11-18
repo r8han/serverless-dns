@@ -19,7 +19,8 @@
     "blocklists:prepare": "sh scripts/prepare.sh",
     "lint": "eslint --quiet --ext .js,.mjs,.cjs src test/unit test/*.mjs scripts",
     "access-key": "node scripts/access-key.mjs",
-    "audit:dependencies": "npm audit --package-lock-only --include=dev --include=optional --audit-level=low --registry=https://registry.npmjs.org && npm audit --package-lock-only --omit=dev --omit=optional --audit-level=low --registry=https://registry.npmjs.org"
+    "audit:dependencies": "sh scripts/audit-dependencies.sh",
+    "setup:fastly": "npm --prefix tools/fastly install --ignore-scripts --no-package-lock"
   },
   "repository": {
     "type": "git",
@@ -37,31 +38,25 @@
     "@serverless-dns/dns-parser": "https://codeload.github.com/serverless-dns/dns-parser/tar.gz/b7d73b3d7aca64575887758cb75de599fa3e4c01",
     "@serverless-dns/lfu-cache": "https://codeload.github.com/serverless-dns/lfu-cache/tar.gz/41ab26202166e8a9ebee8e7d1e9da3a7293f3f5d",
     "@serverless-dns/trie": "https://codeload.github.com/serverless-dns/trie/tar.gz/6a67356a6856a4173b646112fb90e763fc3156c2",
-    "httpx-server": "^2.0.0",
-    "proxy-protocol-js": "^4.0.6"
-  },
-  "optionalDependencies": {
-    "@fastly/js-compute": "4.3.0"
+    "httpx-server": "2.0.0",
+    "proxy-protocol-js": "4.0.6"
   },
   "devDependencies": {
-    "@types/node": "^16.18.126",
-    "buffer": "^6.0.3",
-    "eslint": "^8.57.1",
-    "eslint-config-google": "^0.14.0",
-    "eslint-plugin-prettier": "^4.2.5",
+    "@types/node": "16.18.126",
+    "buffer": "6.0.3",
+    "eslint": "8.57.1",
+    "eslint-config-google": "0.14.0",
+    "eslint-plugin-prettier": "4.2.5",
     "prettier": "2.5.1",
-    "webpack": "^5.103.0",
-    "webpack-cli": "^4.10.0",
-    "why-is-node-running": "^3.2.2",
+    "webpack": "5.112.2",
+    "webpack-cli": "4.10.0",
+    "why-is-node-running": "3.2.3",
     "wrangler": "4.164.0"
   },
   "eslintIgnore": [
     "src/core/cfg.js"
   ],
   "overrides": {
-    "@serverless-dns/lfu-cache": "$@serverless-dns/lfu-cache",
-    "@bytecodealliance/jco-std": {
-      "minimatch": "11.0.9"
-    }
+    "@serverless-dns/lfu-cache": "$@serverless-dns/lfu-cache"
   }
 }

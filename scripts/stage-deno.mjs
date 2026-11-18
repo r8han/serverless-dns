@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
-// Deploy the checked graph as local files: a provider must not have to trust
-// a mutable module cache or implement deno.lock verification on our behalf.
+// Cross-check Deno's commit-addressed remote imports against the npm source
+// archives for the same commits. The provider receives local files only.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import {
   copyFile,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
+  rm,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -15,7 +19,33 @@ const dest = process.argv[2];
 if (!dest) throw new Error("pass a new release directory");
 await mkdir(dest); // refuse to merge into an existing release
 const deps = (await json("package.json")).dependencies;
-const pins = (await json("deno.lock")).remote;
+// Use Deno's resolver rather than hand-parsing imports. Keep its temporary
+// checksums only for this build, never as a source input or runtime dependency.
+async function resolveGraph() {
+  const dir = await mkdtemp(join(tmpdir(), "sdns-deno-graph-"));
+  try {
+    const lock = join(dir, "deno.lock");
+    execFileSync(
+      "deno",
+      [
+        "cache",
+        "--allow-import=raw.githubusercontent.com",
+        "--no-npm",
+        `--lock=${lock}`,
+        "--frozen=false",
+        "src/server-deno.ts",
+      ],
+      { stdio: "inherit" }
+    );
+    const { remote } = await json(lock);
+    if (!remote || !Object.keys(remote).length) {
+      throw new Error("empty Deno module graph");
+    }
+    return remote;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 const map = await json("import_map.json");
 const prefixes = new Map();
 for (const lib of ["dns-parser", "lfu-cache", "trie"]) {
@@ -42,7 +72,7 @@ function relative(url) {
   }
   throw new Error("unknown remote Deno dependency");
 }
-for (const [url, expected] of Object.entries(pins)) {
+for (const [url, expected] of Object.entries(await resolveGraph())) {
   const path = relative(url);
   const bytes = await readFile(join("node_modules/@serverless-dns", path));
   if (createHash("sha256").update(bytes).digest("hex") !== expected) {
@@ -66,7 +96,7 @@ await writeFile(
   JSON.stringify({
     importMap: "import_map.json",
     nodeModulesDir: "manual",
-    lock: { path: "deno.lock", frozen: true },
+    lock: false,
   })
 );
 for (const lib of prefixes.values()) {
@@ -75,9 +105,7 @@ for (const lib of prefixes.values()) {
     join(dest, "vendor", lib, "LICENSE")
   );
 }
-for (const p of ["deno.lock", "LICENSE"]) {
-  await copyFile(p, join(dest, p));
-}
+await copyFile("LICENSE", join(dest, "LICENSE"));
 // Only application sources and the one prepared input, never dotfiles,
 // credentials, build-tool dependencies, fixtures or an entire checkout.
 async function sources(dir) {

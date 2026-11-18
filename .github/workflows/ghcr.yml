@@ -1,8 +1,16 @@
 name: Scan and promote container
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      include_deno:
+        description: 'Also build, scan and promote the optional Deno image'
+        type: boolean
+        default: false
 permissions: { contents: read }
 jobs:
   checks:
+    outputs:
+      runtimes: ${{ inputs.include_deno && '["node","bun","deno"]' || '["node","bun"]' }}
     if: github.ref == 'refs/heads/main' && github.ref_protected
     runs-on: ubuntu-latest
     steps:
@@ -10,10 +18,12 @@ jobs:
         with: { persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: '24.22.3' }
-      - run: npm ci --ignore-scripts --omit=optional && npm run audit:dependencies && npm run lint && npm test
+      - run: npm install --ignore-scripts --package-lock --omit=optional && npm run audit:dependencies && npm run lint && npm test
   verify:
     needs: checks
-    strategy: { matrix: { runtime: [node, bun, deno] } }
+    strategy:
+      matrix:
+        runtime: ${{ fromJSON(needs.checks.outputs.runtimes) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -40,8 +50,10 @@ jobs:
             SHA256SUMS
           retention-days: 2
   promote:
-    needs: verify
-    strategy: { matrix: { runtime: [node, bun, deno] } }
+    needs: [checks, verify]
+    strategy:
+      matrix:
+        runtime: ${{ fromJSON(needs.checks.outputs.runtimes) }}
     environment: production-images
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write, attestations: write, id-token: write }

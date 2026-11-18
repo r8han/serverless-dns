@@ -24,6 +24,12 @@ fixture/
 .dev.vars*
 .wrangler/
 
+# Dependency resolutions are local to an install/build, not source inputs.
+package-lock.json
+bun.lock
+bun.lockb
+deno.lock
+
 # Cache
 .eslintcache
 bin/main.wasm
