@@ -27,20 +27,34 @@ const proc = spawn(
   ],
   { stdio: ["ignore", "inherit", "inherit"] }
 );
-const exit = once(proc, "exit");
+// Viceroy compiles the module before it listens. Cold CI runners can take
+// longer than a request deadline. Retry only connections refused at startup,
+// never a timeout, an HTTP error, or a failed Wasm response.
+const closed = new Promise((resolve) => proc.once("close", resolve));
 try {
+  await once(proc, "spawn");
+  const deadline = performance.now() + 60000;
   let r;
-  for (let i = 0; i < 30 && proc.exitCode === null; i++) {
+  for (;;) {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      throw new Error(
+        `Viceroy exited before listening: ${proc.signalCode ?? proc.exitCode}`
+      );
+    }
     try {
       r = await fetch(url + "/genaccesskey", {
         signal: AbortSignal.timeout(3000),
       });
       break;
-    } catch {
+    } catch (e) {
+      if (e.cause?.code !== "ECONNREFUSED") throw e;
+      if (performance.now() >= deadline) {
+        throw new Error("Viceroy did not listen within 60s", { cause: e });
+      }
       await delay(250);
     }
   }
-  assert.equal(r?.status, 410);
+  assert.equal(r.status, 410);
   assert.equal(r.headers.get("cache-control"), "private, no-store");
   const q = mkQ(14, [{ name: "listed.example", type: "A" }]);
   const failed = await fetch(url + "/1:AIAAgA", {
@@ -54,7 +68,7 @@ try {
   assert.equal(packet.id, 14);
   assert.equal(packet.rcode, "SERVFAIL");
 } finally {
-  proc.kill("SIGKILL");
-  await exit;
+  if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+  await closed;
   await rm(dir, { recursive: true, force: true });
 }
