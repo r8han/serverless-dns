@@ -40,14 +40,14 @@ module.exports = {
       type: "module",
     },
     clean: true,
-    filename: "fly.mjs",
+    filename: "node.mjs",
     module: true,
   },
 
   // or, cjs: stackoverflow.com/a/68916455
   /*
   output: {
-    filename: "fly.cjs",
+    filename: "node.cjs",
     clean: true, // empty dist before output
   },
   */

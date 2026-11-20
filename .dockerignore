@@ -12,4 +12,4 @@
 !config/blocklist-manifest.json
 !LICENSE
 !package.json
-!webpack.fly.cjs
+!webpack.node.cjs

@@ -1,6 +1,6 @@
 #### It's a bird, it's a plane, it's... a self-hosted, pi-hole esque, DNS resolver
 
-_serverless-dns_ is a Pi-Hole esque [content-blocking](https://github.com/serverless-dns/blocklists), serverless, stub DNS-over-HTTPS (DoH) and DNS-over-TLS (DoT) resolver. Primary targets are [Cloudflare Workers](https://workers.dev) and Node/Bun (including [Fly.io](https://fly.io/)). Free tiers of these services should be enough to cover 10 to 20 devices worth of DNS traffic per month.
+_serverless-dns_ is a Pi-Hole esque [content-blocking](https://github.com/serverless-dns/blocklists), serverless, stub DNS-over-HTTPS (DoH) and DNS-over-TLS (DoT) resolver. Primary targets are [Cloudflare Workers](https://workers.dev) and self-hosted Node/Bun. The Cloudflare Workers free tier should be enough to cover 10 to 20 devices worth of DNS traffic per month.
 
 ### The RethinkDNS resolver
 
@@ -9,7 +9,6 @@ RethinkDNS runs `serverless-dns` in production at these endpoints:
 | Cloud platform     | Server locations | Protocol    | Domain                    | Usage                                   |
 |--------------------|------------------|-------------|---------------------------|-----------------------------------------|
 | ⛅ Cloudflare Workers | 280+ ([ping](https://check-host.net/check-ping?host=https://sky.rethinkdns.com))           | DoH         | `sky.rethinkdns.com`    | [configure](https://rethinkdns.com/configure?p=doh)  |
-| 🪂 Fly.io             | 30+ ([ping](https://check-host.net/check-ping?host=https://max.rethinkdns.com))           | DoH and DoT | `max.rethinkdns.com`      | [configure](https://rethinkdns.com/configure?p=dot)  |
 
 Server-side processing takes from 0 milliseconds (ms) to 2ms (median), and end-to-end latency (varies across regions and networks) is between 10ms to 30ms (median).
 
@@ -19,8 +18,6 @@ Server-side processing takes from 0 milliseconds (ms) to 2ms (median), and end-t
 [<img src="https://floss.fund/static/badge.svg"
     alt="FLOSS/fund badge"
     height="40">](https://floss.fund)
-
-The *Rethink DNS* resolver on Fly.io is sponsored by [FLOSS/fund](https://floss.fund) and FOSS United.
 
 ### Self-host
 
@@ -59,10 +56,10 @@ export BLOCKLIST_VERSION=2024/1706100000000 BLOCKLIST_MANIFEST="$fixture/manifes
 cp "$fixture/blocklist-metadata.json" src/
 npm run build
 node test/worker-smoke.mjs
-npm run build:fly && node test/listener-smoke.mjs node
+npm run build:node && node test/listener-smoke.mjs node
 ```
 
-Discard the disposable checkout and fixture after testing. Never set those two fixture variables on a release runner. `./run node|bun|workers|fly` prepares trusted metadata before building or starting the respective service (Wrangler does so via its build command). Local Node/Bun termination defaults to loopback with the public test identity, **for development only**. Use `./run profile` for an offline CPU profile. See the [runtime test matrix](docs/security/rollout.md#release-gates).
+Discard the disposable checkout and fixture after testing. Never set those two fixture variables on a release runner. `./run node|bun|workers` prepares trusted metadata before building or starting the respective service (Wrangler does so via its build command). Local Node/Bun termination defaults to loopback with the public test identity, **for development only**. Use `./run profile` for an offline CPU profile. See the [runtime test matrix](docs/security/rollout.md#release-gates).
 
 #### Checks
 
@@ -90,6 +87,6 @@ The program writes the bearer with mode `0600` and prints only a `host|verifier`
 | Target | Entrypoint | Configuration |
 |---|---|---|
 | Cloudflare Worker | `src/server-workers.js` | `wrangler.toml`; production `WORKER_ENV=production` |
-| Node / Bun | `src/server-node.js` | `NODE_ENV=production` / `BUN_ENV=production`, `fly.toml` or `fly.tls.toml` |
+| Node / Bun | `src/server-node.js` | `NODE_ENV=production` / `BUN_ENV=production` |
 
-For local termination use `TLS_MODE=terminate` and mount `TLS_KEY_PATH` / `TLS_CRT_PATH`. In production specify `CLOUD_PLATFORM=standalone` or `fly`. To offload TLS at a trusted gateway use `TLS_MODE=offload` with a private backend that forwards cleartext DoH (Node accepts HTTP/1.1 or h2c on that port); **no** cleartext DoT substitute. PSK is a separately provisioned Node TLS optimization, not DNS access control. Telemetry export and history reads are **off by default**. Workers can optionally [report the country of the DNS answer IP](docs/security/rollout.md#answer-country-breakdown-off-by-default), without exporting the IP or geolocating the requester. See the [migration, pinning and operator checklist](docs/security/rollout.md) before changing any of these settings.
+For local termination use `TLS_MODE=terminate` and mount `TLS_KEY_PATH` / `TLS_CRT_PATH`. In production specify `CLOUD_PLATFORM=standalone`. To offload TLS at a trusted gateway use `TLS_MODE=offload` with a private backend that forwards cleartext DoH (Node accepts HTTP/1.1 or h2c on that port); **no** cleartext DoT substitute. PSK is a separately provisioned Node TLS optimization, not DNS access control. Telemetry export and history reads are **off by default**. Workers can optionally [report the country of the DNS answer IP](docs/security/rollout.md#answer-country-breakdown-off-by-default), without exporting the IP or geolocating the requester. See the [migration, pinning and operator checklist](docs/security/rollout.md) before changing any of these settings.

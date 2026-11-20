@@ -42,12 +42,7 @@ export function cacheKey(packet, revision, preferred = "") {
     return null;
   }
   const q = packet.questions[0];
-  const view = [
-    env.forceDoh(),
-    env.region(),
-    preferred || "",
-    ...env.dohResolvers(),
-  ];
+  const view = [env.forceDoh(), preferred || "", ...env.dohResolvers()];
   const fields = [
     revision,
     env.blockSubdomains(),

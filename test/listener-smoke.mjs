@@ -34,7 +34,7 @@ const testCrt = resolve("test/data/tls/dns.rethinkdns.localhost.crt");
 const tempCrt = join(cwd, "ephemeral.crt");
 const tempKey = join(cwd, "ephemeral.key");
 const testKey = resolve("test/data/tls/dns.rethinkdns.localhost.key");
-const args = [resolve("dist", runtime === "bun" ? "bun.mjs" : "fly.mjs")];
+const args = [resolve("dist", runtime === "bun" ? "bun.mjs" : "node.mjs")];
 const bearer = "b".repeat(43);
 const host = "dns.rethinkdns.localhost";
 const query = Buffer.from(mkQ(30, [{ name: "listed.example", type: "A" }]));

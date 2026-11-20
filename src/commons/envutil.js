@@ -14,12 +14,6 @@ export function isProd() {
   return envManager.determineEnvStage() === "production";
 }
 
-export function onFly() {
-  if (!envManager) return false;
-
-  return envManager.get("CLOUD_PLATFORM") === "fly";
-}
-
 export function onCloudflare() {
   if (!envManager) return false;
 
@@ -31,7 +25,7 @@ export function onCloudflare() {
 export function onLocal() {
   if (!envManager) return false;
 
-  return !onFly() && !onCloudflare();
+  return !onCloudflare();
 }
 
 export function hasHttpCache() {
@@ -151,21 +145,20 @@ export function isDotOverProxyProto() {
 export function isCleartext() {
   if (!envManager) return false;
 
-  // when connecting to <appname>.fly.dev domains, fly.io edge handles tls;
-  // and so, conns from fly.io edge to app is in cleartext
+  // when a trusted gateway terminates tls, conns from it to this
+  // listener are in cleartext
   return envManager.get("TLS_MODE") === "offload";
 }
 
 // sysctl get net.ipv4.tcp_syn_backlog
 export function tcpBacklog() {
-  if (!envManager) return 600; // same as fly.service soft_limit
+  if (!envManager) return 600;
 
   return envManager.get("TCP_BACKLOG") || 600;
 }
 
-// don't forget to update the fly.toml too
 export function maxconns() {
-  if (!envManager) return 1000; // 25% higher than fly.service hard_limit
+  if (!envManager) return 1000;
 
   return envManager.get("MAXCONNS") || 1000;
 }
@@ -195,7 +188,7 @@ export function blocklistDownloadOnly() {
   return envManager.get("BLOCKLIST_DOWNLOAD_ONLY");
 }
 
-// Ports which the services are exposed on. Corresponds to fly.toml ports.
+// Ports which the services are exposed on.
 export function dohBackendPort() {
   return 8080;
 }
@@ -259,12 +252,6 @@ export function blockSubdomains() {
   return globalThis.envManager?.get("BLOCK_SUBDOMAINS") ?? true;
 }
 
-// recurisve resolver on Fly
-// see: node/config.js#prep
-export function recursive() {
-  return onFly();
-}
-
 export function gwip4() {
   if (!envManager) return "";
   return envManager.get("GW_IP4") || "";
@@ -273,9 +260,4 @@ export function gwip4() {
 export function gwip6() {
   if (!envManager) return "";
   return envManager.get("GW_IP6") || "";
-}
-
-export function region() {
-  if (!envManager) return "";
-  return envManager.get("FLY_REGION") || "";
 }

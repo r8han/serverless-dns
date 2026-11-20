@@ -7,8 +7,7 @@
  */
 
 import DNSResolver from "./resolver.js";
-import { DNSPrefilter } from "./prefilter.js";
 import { DNSCacheResponder } from "./cache-resolver.js";
 import { DnsCache } from "./cache.js";
 
-export { DNSResolver, DNSCacheResponder, DnsCache, DNSPrefilter };
+export { DNSResolver, DNSCacheResponder, DnsCache };

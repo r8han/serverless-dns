@@ -42,7 +42,6 @@ async function prep() {
   const isProd =
     process.env.NODE_ENV === "production" ||
     process.env.BUN_ENV === "production";
-  const onFly = process.env.CLOUD_PLATFORM === "fly";
   const profiling = process.env.PROFILE_DNS_RESOLVES === "true";
   globalThis.envManager = new EnvManager();
   const logger = new Log({
@@ -60,7 +59,7 @@ async function prep() {
       platform: process.env.CLOUD_PLATFORM,
       mode: process.env.TLS_MODE,
       tlsBind: process.env.TLS_BIND,
-      privateBind: process.env.OFFLOAD_BIND || process.env.FLY_PRIVATE_IP,
+      privateBind: process.env.OFFLOAD_BIND,
     });
     if (
       (envManager.get("TLS_OFFLOAD") && listener.mode !== "offload") ||
@@ -85,8 +84,7 @@ async function prep() {
   }
 
   // TODO: move dns* related settings to env
-  // flydns is always ipv6 (fdaa::53)
-  const plainOldDnsIp = onFly ? "fdaa::3" : "1.1.1.2";
+  const plainOldDnsIp = "1.1.1.2";
   const dns53 = envManager.get("NODE_DOH_ONLY")
     ? null
     : dnst.makeTransport(plainOldDnsIp);

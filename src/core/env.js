@@ -41,7 +41,7 @@ const defaults = new Map(
       type: "string",
       default: "development",
     },
-    // the cloud-platform code is deployed on (cloudflare, fly)
+    // the cloud-platform code is deployed on (cloudflare, standalone)
     CLOUD_PLATFORM: {
       type: "string",
       // also ref: EnvManager.mostLikelyCloudPlatform()
@@ -62,8 +62,8 @@ const defaults = new Map(
       type: "string",
       default: "test/data/tls/dns.rethinkdns.localhost.crt",
     },
-    // indicate if tls termination is offload to an external process; for ex
-    // <appname>.fly.dev as primary access-point w fly.io edge terminating tls.
+    // indicate if tls termination is offloaded to an external process; for
+    // example, a gateway that terminates tls in front of this listener.
     TLS_OFFLOAD: {
       type: "boolean",
       default: false,
@@ -249,13 +249,10 @@ export default class EnvManager {
   // most-likely but not definitive platform this code is running on
   mostLikelyCloudPlatform() {
     const isDev = this.determineEnvStage() === "development";
-    // FLY_ALLOC_ID=5778f6b7-3cc2-d011-36b1-dfe057b0dc79 is set on fly-vms
-    const hasFlyAllocId = this.get("FLY_ALLOC_ID") != null;
     const hasWorkersUa =
       typeof navigator !== "undefined" &&
       navigator.userAgent === "Cloudflare-Workers";
 
-    if (hasFlyAllocId) return "fly";
     if (hasWorkersUa) return "cloudflare";
     // if dev, then whatever is running is likely local
     if (isDev) return "local";
@@ -269,7 +266,6 @@ export default class EnvManager {
   // most relevant host id for this env
   mostRelevantHostId(cloud) {
     if (cloud === "local") return "localhost";
-    if (cloud === "fly") return this.get("FLY_MACHINE_ID") || "";
     return "";
   }
 

@@ -6,7 +6,6 @@ name=$1
 dest=$2
 case "$name" in
   gh) repo=cli/cli; ver=2.105.0; file=gh_2.105.0_linux_amd64.tar.gz; digest=79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f;;
-  flyctl) repo=superfly/flyctl; ver=0.5.12; file=flyctl_0.5.12_Linux_x86_64.tar.gz; digest=41e3194dde966648e0943c13230c7a9c9874a7a235ac507dbf4ad4f575fa54fc;;
   syft) repo=anchore/syft; ver=1.57.2; file=syft_1.57.2_linux_amd64.tar.gz; digest=ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b;;
   grype) repo=anchore/grype; ver=0.122.1; file=grype_0.122.1_linux_amd64.tar.gz; digest=f1ba7e2917ee1395618de20a98da0aa7c0fb1788927797651047c50502a37538;;
   *) exit 2;;

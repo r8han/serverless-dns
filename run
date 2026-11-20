@@ -5,7 +5,6 @@ case "${1:-node}" in
   n|node) sh scripts/prepare.sh && exec node src/server-node.js ;;
   b|bun) sh scripts/prepare.sh && exec bun src/server-node.js ;;
   w|workers) exec ./node_modules/.bin/wrangler dev --local ;;
-  ff|fly) npm run build:fly && exec node dist/fly.mjs ;;
   profile) exec node --cpu-prof test/unit/resolver.test.js ;;
-  *) echo "Usage: $0 [node|bun|workers|fly|profile]" >&2; exit 2 ;;
+  *) echo "Usage: $0 [node|bun|workers|profile]" >&2; exit 2 ;;
 esac

@@ -22,7 +22,7 @@ export function listenerPolicy({
     platform ||= "local";
   }
   if (
-    !["local", "fly", "standalone"].includes(platform) ||
+    !["local", "standalone"].includes(platform) ||
     !["terminate", "offload"].includes(mode)
   ) {
     throw new Error("explicit CLOUD_PLATFORM and TLS_MODE required");

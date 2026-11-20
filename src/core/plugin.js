@@ -31,7 +31,7 @@ export default class RethinkPlugin {
     const rxid = util.xid();
     this.addCtx("rxid", "[rx." + rxid + "]");
 
-    // works on fly.io and cloudflare
+    // region is populated on Cloudflare
     this.addCtx("region", getRegion(event.request) || "");
 
     // caution: event isn't an event on nodejs, but event.request is a request
@@ -54,15 +54,6 @@ export default class RethinkPlugin {
       ["rxid", "request", "requestDecodedDnsPacket", "isDnsMsg"],
       this.userOpCallback
     );
-
-    // filter out undelegated domains if running recurisve resolver
-    envutil.recursive() &&
-      this.registerPlugin(
-        "prefilter",
-        services.prefilter,
-        ["rxid", "requestDecodedDnsPacket"],
-        this.prefilterCallback
-      );
 
     this.registerPlugin(
       "cacheOnlyResolver",
@@ -208,28 +199,6 @@ export default class RethinkPlugin {
       this.addCtx("userDnsResolverUrl", rr);
     } else {
       this.log.i(rxid, "user-op is a no-op, possibly a command-control req");
-    }
-  }
-
-  /**
-   * @param {RResp} response
-   * @param {IOState} io
-   */
-  prefilterCallback(response, io) {
-    const rxid = this.ctx.get("rxid");
-    const r = response.data;
-    const deny = r.isBlocked;
-    const err = response.isException;
-    this.log.d(rxid, "prefilter deny?", deny, "err?", err);
-
-    if (err) {
-      this.log.w(rxid, "prefilter error");
-      this.loadException(rxid, response, io);
-    } else if (deny) {
-      this.addCtx("isBlocked", true);
-      io.dnsNxDomainResponse(r.flag);
-    } else {
-      this.log.d(rxid, "prefilter no-op");
     }
   }
 
@@ -385,8 +354,6 @@ function makectx(context, ctxkeys) {
 function getRegion(request) {
   if (envutil.onCloudflare()) {
     return util.regionFromCf(request);
-  } else if (envutil.onFly()) {
-    return envutil.region();
   }
   return "";
 }
