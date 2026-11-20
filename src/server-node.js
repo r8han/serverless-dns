@@ -20,13 +20,12 @@ import tls, { TLSSocket } from "node:tls";
 import v8 from "node:v8";
 import os from "os";
 import process from "process";
-import { V2ProxyProtocol } from "proxy-protocol-js";
 import { readIncoming } from "./commons/bounded.js";
 import * as bufutil from "./commons/bufutil.js";
 import * as dnsutil from "./commons/dnsutil.js";
 import * as envutil from "./commons/envutil.js";
 import * as util from "./commons/util.js";
-import { handleRequest } from "./core/doh.js";
+import { admitPrivate, handleRequest } from "./core/doh.js";
 import { log as log2, loggerWithTags } from "./core/log.js";
 import http from "node:http";
 import { readFrame } from "./commons/dns-frame.js";
@@ -272,7 +271,6 @@ function systemDown() {
   adjustMaxConns(1);
 
   // drain all sockets stackoverflow.com/a/14636625
-  // TODO: handle proxy protocol sockets
   for (const m of cmap) {
     if (!m) continue;
     log2.w("W closing...", m.size, "connections");
@@ -388,7 +386,6 @@ function systemUp() {
         "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE+AESGCM:ECDHE+CHACHA20:PSK-AES128-GCM-SHA256:!aNULL:!eNULL";
     }
     const portdot1 = envutil.dotBackendPort();
-    const portdot2 = envutil.dotProxyProtoBackendPort();
     const portdoh = envutil.dohBackendPort();
     /** @type {net.ListenOptions} */
     const dohOpts = { port: portdoh, host: listener.host, backlog: tcpbacklog };
@@ -399,11 +396,6 @@ function systemUp() {
       backlog: tcpbacklog,
     };
     /** @type {net.ListenOptions} */
-    const dot2Opts = {
-      port: portdot2,
-      host: listener.host,
-      backlog: tcpbacklog,
-    };
     // DNS over TLS
     const dot1 =
       !envutil.requiresHeaderAuth() &&
@@ -414,15 +406,6 @@ function systemUp() {
           certUpdateForever(dotSecOpts, dot1);
           trapSecureServerEvents("dot1", dot1);
         });
-
-    // DNS over TLS w ProxyProto
-    const dot2 =
-      !envutil.requiresHeaderAuth() &&
-      envutil.isDotOverProxyProto() &&
-      net.createServer(serverOpts, serveDoTProxyProto).listen(dot2Opts, () => {
-        up("DoT ProxyProto", dot2.address());
-        trapServerEvents("dot2", dot2);
-      });
 
     // DNS over HTTPS
     if (supportsHttp2) {
@@ -807,86 +790,22 @@ function tcpOkay(sock) {
   return sock && sock.writable;
 }
 
-/**
- * Creates a duplex pipe between `a` and `b` sockets.
- * @param {Socket?} a
- * @param {Socket?} b
- * @return {Boolean} - true if pipe created, false if error
- */
-function proxySockets(a, b) {
-  if (!a || !b) return false;
-  if (a.destroyed || b.destroyed) return false;
-  // handle errors? stackoverflow.com/a/61091744
-  a.pipe(b);
-  b.pipe(a);
-  return true;
-}
-
-/**
- * Proxies connection to DOT server, retrieving proxy proto header.
- * @param {Socket} clientSocket
- */
-function serveDoTProxyProto(clientSocket) {
-  let ppHandled = false;
-  log.d("--> new client Connection");
-
-  const dotSock = net.connect(envutil.dotBackendPort(), () =>
-    log.d("pp: dot socket ready")
-  );
-
-  dotSock.on("error", (e) => {
-    log.w("pp: dot socket err", e);
-    close(clientSocket);
-    close(dotSock);
-  });
-
-  function handleProxyProto(buf) {
-    // Data from only first tcp segment is to be consumed to get proxy proto.
-    // After extracting proxy proto, a duplex pipe is created to DoT server.
-    // So, further tcp segments return here.
-    if (ppHandled) return;
-
-    const chunk = buf.toString("ascii");
-    const delim = chunk.indexOf("\r\n") + 2; // CRLF = \x0D \x0A
-    ppHandled = true;
-
-    if (delim < 2) {
-      log.e("pp: invalid header");
-      close(clientSocket);
-      close(dotSock);
-      return;
-    }
-
-    try {
-      // TODO: admission control
-      const proto = V2ProxyProtocol.parse(chunk.slice(0, delim));
-
-      // remaining data from first tcp segment
-      if (!dotSock.destroyed) dotSock.write(buf.slice(delim));
-
-      const ok = proxySockets(clientSocket, dotSock);
-      if (!ok) throw new Error(proto + " err clientSock <> dotSock proxy");
-    } catch (e) {
-      log.w("proxy connection failed");
-      close(clientSocket);
-      close(dotSock);
-      return;
-    }
-  }
-
-  clientSocket.on("error", (_e) => {
-    log.w("pp: client err, closing");
-    close(clientSocket);
-    close(dotSock);
-  });
-  clientSocket.on("data", handleProxyProto);
-}
+const publicDotClients = new Map();
 
 /**
  * Services a DNS over TLS connection
  * @param {TLSSocket} socket
  */
 async function serveTLS(socket, cert) {
+  const client = socket.remoteAddress;
+  if (client) {
+    const count = publicDotClients.get(client) || 0;
+    if (count >= 16) {
+      socket.destroy();
+      return;
+    }
+    publicDotClients.set(client, count + 1);
+  }
   const ctl = new AbortController();
   const abort = () => ctl.abort();
   socket.once("close", abort);
@@ -947,6 +866,11 @@ async function serveTLS(socket, cert) {
   } finally {
     abort();
     socket.off("close", abort);
+    if (client) {
+      const left = publicDotClients.get(client) - 1;
+      if (left) publicDotClients.set(client, left);
+      else publicDotClients.delete(client);
+    }
     socket.destroy();
   }
 }
@@ -995,6 +919,7 @@ function serve200(req, res) {
  * @param {Http2ServerResponse} res
  */
 let httpActive = 0;
+const publicHttpClients = new Map();
 async function serveHTTPS(req, res) {
   if (httpActive >= 256 || req.url.length > 8192) {
     res.writeHead(httpActive >= 256 ? 503 : 414, {
@@ -1002,6 +927,39 @@ async function serveHTTPS(req, res) {
     });
     res.end(() => req.destroy());
     return;
+  }
+  let admission;
+  try {
+    const preflight = new Request(nodeutil.requestUrl(req.headers, req.url), {
+      method: req.method,
+      headers: nodeutil.copyNonPseudoHeaders(req.headers),
+    });
+    admission = await admitPrivate(preflight);
+  } catch {
+    admission = { status: 400 };
+  }
+  if (admission.status || httpActive >= 256 || !resOkay(res)) {
+    admission.release?.();
+    if (resOkay(res)) {
+      res.writeHead(admission.status || 503, {
+        "cache-control": "private, no-store",
+      });
+      res.end(() => req.destroy());
+    }
+    return;
+  }
+  // Only the direct listener can trust the socket address as the client.
+  const client =
+    !envutil.requiresHeaderAuth() && listener?.mode === "terminate"
+      ? req.socket.remoteAddress
+      : null;
+  if (client && (publicHttpClients.get(client) || 0) >= 16) {
+    res.writeHead(429, { "cache-control": "private, no-store" });
+    res.end(() => req.destroy());
+    return;
+  }
+  if (client) {
+    publicHttpClients.set(client, (publicHttpClients.get(client) || 0) + 1);
   }
   httpActive++;
   const ctl = new AbortController();
@@ -1018,7 +976,8 @@ async function serveHTTPS(req, res) {
       req,
       res,
       ctl.signal,
-      deadline
+      deadline,
+      admission
     );
   } catch (e) {
     if (resOkay(res) && !res.headersSent) {
@@ -1031,6 +990,12 @@ async function serveHTTPS(req, res) {
     else req.destroy();
   } finally {
     httpActive--;
+    if (client) {
+      const left = publicHttpClients.get(client) - 1;
+      if (left) publicHttpClients.set(client, left);
+      else publicHttpClients.delete(client);
+    }
+    admission.release?.();
     res.off("close", abort);
     clearTimeout(timer);
   }
@@ -1041,7 +1006,7 @@ async function serveHTTPS(req, res) {
  * @param {Http2ServerRequest} req
  * @param {Http2ServerResponse} res
  */
-async function handleHTTPRequest(b, req, res, signal, deadline) {
+async function handleHTTPRequest(b, req, res, signal, deadline, admission) {
   heartbeat();
 
   const rxid = util.xid();
@@ -1060,6 +1025,7 @@ async function handleHTTPRequest(b, req, res, signal, deadline) {
 
     const event = util.mkFetchEvent(fReq);
     event.deadline = deadline;
+    event.privateAdmission = admission;
     const fRes = await handleRequest(event);
 
     if (!resOkay(res)) {

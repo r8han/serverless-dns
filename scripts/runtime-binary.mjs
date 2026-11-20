@@ -3,12 +3,21 @@
 // with a deployment token. Extract one known file after integrity verification.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { readBounded } from "../src/commons/bounded.js";
+const nodeVersion = readFileSync(
+  new URL("../.node-version", import.meta.url),
+  "utf8"
+).trim();
 const pins = {
+  node: [
+    `node-linux-x64/-/node-linux-x64-${nodeVersion}.tgz`,
+    "PCkqT4dt05O59VMEPf1K1gG5wNuTom335o1D+603YoLJ/sZvofq3CzKZKmaaNjAImwYtBQH7twPwXYM0nViCXQ==",
+    "package/bin/node",
+  ],
   bun: [
-    "@oven/bun-linux-x64/-/bun-linux-x64-1.3.3.tgz",
-    "7eIARtKZKZDtah1aCpQUj/1/zT/zHRR063J6oAxZP9AuA547j5B9OM2D/vi/F4En7Gjk9FPjgPGTSYeqpQDzJw==",
+    "@oven/bun-linux-x64/-/bun-linux-x64-1.4.5.tgz",
+    "IWX9BELoGHAUtMonkeSaNaZwXzRk+oDw6Mk+HBFXd3KHYIBNBsIGRupMZPcgNoDbJpLu6gAJjIoIVPZtt1aJ1g==",
     "package/bin/bun",
   ],
 };

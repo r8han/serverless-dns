@@ -36,7 +36,9 @@ const build = (bindings = {}, captureMetrics = false) =>
       compatibilityDate: "2023-03-21",
       bindings: {
         CLOUD_PLATFORM: "cloudflare",
+        DNS_CACHE_ENABLED: "true",
         WORKER_ENV: "production",
+        DNS_ACCESS_MODE: "public",
         LOG_LEVEL: "error",
         ...bindings,
         CF_BLOCKLIST_URL: "https://fixture.test/",
@@ -115,6 +117,7 @@ try {
 const bearer = "w".repeat(43); // synthetic, never a real credential
 const geo = build(
   {
+    DNS_ACCESS_MODE: "private",
     ACCESS_KEYS: (await verifier(bearer, "resolver.test")) + "|demo|write",
     LOGPUSH_SRC: "resolver.test",
     LOGPUSH_ENABLED: "true",

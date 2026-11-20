@@ -54,6 +54,20 @@ async function prep() {
   // ---- log and envManager available only after this line ---- \\
 
   if (!envManager.get("BLOCKLIST_DOWNLOAD_ONLY")) {
+    if (isProd) {
+      const [major, minor, patch] = (
+        process.versions.bun || process.versions.node
+      )
+        .split(".")
+        .map(Number);
+      const floor = process.versions.bun
+        ? major === 1 && minor * 1000 + patch >= 4005
+        : major === 26 && minor * 1000 + patch >= 13001;
+      if (!floor) throw new Error("unsupported production runtime version");
+    }
+    if (envManager.get("DOT_HAS_PROXY_PROTO")) {
+      throw new Error("DoT PROXY protocol is not supported; use direct TLS");
+    }
     listener = listenerPolicy({
       production: isProd,
       platform: process.env.CLOUD_PLATFORM,

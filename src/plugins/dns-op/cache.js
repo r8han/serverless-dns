@@ -10,7 +10,10 @@ import { CacheApi } from "./cache-api.js";
 
 export class DnsCache {
   constructor(size, bytes = dnsutil.cacheBytes()) {
-    this.disabled = env.disableDnsCache();
+    this.disabled =
+      env.disableDnsCache() ||
+      env.requiresHeaderAuth() ||
+      !globalThis.envManager?.get("DNS_CACHE_ENABLED");
     // Answers carry up to a full DNS packet each, so they are bounded by
     // bytes as well as entries. Policy entries are per-question stamps and
     // are small enough for the entry cap to bound them.

@@ -9,8 +9,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with: { persist-credentials: false }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: '24.22.3' }
-      - run: npm install --package-lock --ignore-scripts && npm run audit:dependencies && npm test && npm run build
+        with: { node-version-file: '.node-version' }
+      - run: npm ci --ignore-scripts && npm run audit:dependencies && npm test && npm run build
       - name: Stage only the prebuilt worker and deployment configuration
         run: |
           mkdir -p release/dist
@@ -27,12 +27,12 @@ jobs:
           with open("release/wrangler.json", "x") as target:
               json.dump(cfg, target)
           PYTHON
-          # Carry this build's generated resolution to the isolated uploader;
+          # Carry the reviewed dependency resolution to the isolated uploader;
           # npm ci below must install the same audited CLI, not resolve again.
-          cp package.json package-lock.json release/
+          cp .node-version package.json package-lock.json release/
           cd release && ../node_modules/.bin/wrangler deploy --dry-run --no-bundle --env prod
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with: { name: worker-release, path: release/, retention-days: 2 }
+        with: { name: worker-release, path: release/, retention-days: 2, include-hidden-files: true }
   deploy:
     needs: build
     environment: production-workers
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with: { name: worker-release }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with: { node-version: '24.22.3' }
+        with: { node-version-file: '.node-version' }
       - run: npm ci --ignore-scripts
       - run: ./node_modules/.bin/wrangler deploy --no-bundle --env prod
         env:

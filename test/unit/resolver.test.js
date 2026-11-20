@@ -40,6 +40,7 @@ beforeEach((t) => {
 
 function nodeRuntime(t) {
   const env = new EnvManager();
+  env.set("DNS_CACHE_ENABLED", true, "boolean");
   env.set("NODE_DOH_ONLY", false, "boolean");
   t.mock.method(env, "get", (key) => env.envMap.get(key));
   globalThis.envManager = env;
@@ -51,6 +52,7 @@ function nodeRuntime(t) {
 function worker(t, vars = {}) {
   globalThis.wenv = {
     CLOUD_PLATFORM: "cloudflare",
+    DNS_CACHE_ENABLED: "true",
     CF_DNS_RESOLVER_URL: primary,
     CF_DNS_RESOLVER_URL_2: "",
     ...vars,

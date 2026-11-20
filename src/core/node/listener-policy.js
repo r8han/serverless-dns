@@ -8,7 +8,7 @@ import {
 import { isIP } from "node:net";
 
 // Do not infer a trusted edge from NODE_ENV or from a missing certificate.
-// Offload addresses must be literal private IPs.
+// Offload addresses must be literal loopback IPs.
 /** @param {{production:boolean, platform?:string, mode?:string, privateBind?:string, tlsBind?:string}} options */
 export function listenerPolicy({
   production,
@@ -33,11 +33,9 @@ export function listenerPolicy({
     return { mode, host };
   }
   const ip = privateBind || "127.0.0.1";
-  const local =
-    isIP(ip) === 4
-      ? /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(ip)
-      : isIP(ip) === 6 && (ip === "::1" || /^f[cd]/i.test(ip));
-  if (!local) throw new Error("offload requires private literal bind address");
+  if (!(ip === "::1" || (isIP(ip) === 4 && ip.startsWith("127.")))) {
+    throw new Error("offload requires a loopback bind address");
+  }
   return { mode, host: ip };
 }
 

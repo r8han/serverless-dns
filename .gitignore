@@ -23,8 +23,7 @@ fixture/
 .dev.vars*
 .wrangler/
 
-# Dependency resolutions are local to an install/build, not source inputs.
-package-lock.json
+# npm lockfile is shared by all release builds.
 bun.lock
 bun.lockb
 

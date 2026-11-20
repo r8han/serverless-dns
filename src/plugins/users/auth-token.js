@@ -42,6 +42,17 @@ export function credentials(config) {
   });
 }
 
+export function accessCredentials(mode, config, production) {
+  const entries = credentials(config);
+  if (
+    (mode == null && production) ||
+    (mode != null && mode !== (entries.length ? "private" : "public"))
+  ) {
+    throw new Error("DNS_ACCESS_MODE must match the access keys");
+  }
+  return entries;
+}
+
 function key(bearer, domain) {
   if (!host(domain) || !validBearer.test(bearer)) {
     throw new Error("invalid credential format");
@@ -79,7 +90,12 @@ export async function auth(request, entries) {
         entry.domain === domain &&
         (await hmacverify(ck, entry.mac, context))
       ) {
-        return { ok: true, partition: entry.partition, scope: entry.scope };
+        return {
+          ok: true,
+          partition: entry.partition,
+          scope: entry.scope,
+          principal: entry,
+        };
       }
     }
   }

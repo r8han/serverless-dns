@@ -43,6 +43,7 @@ const base = {
   HOME: process.env.HOME,
   CLOUD_PLATFORM: "standalone",
   NODE_ENV: "production",
+  DNS_ACCESS_MODE: "public",
   BUN_ENV: "production",
   TLS_CRT_PATH: testCrt,
   TLS_KEY_PATH: testKey,
@@ -185,8 +186,15 @@ try {
   });
   await launch({ TLS_MODE: "terminate" }); // reject public fixture identity in production
   await launch({ TLS_MODE: "offload", ACCESS_KEYS: "" });
+  await launch({ TLS_MODE: "offload", DNS_ACCESS_MODE: "private" });
+  await launch({ TLS_MODE: "offload", OFFLOAD_BIND: "10.1.2.3" });
+  await launch({ TLS_MODE: "offload", DOT_HAS_PROXY_PROTO: "true" });
   await launch(
-    { TLS_MODE: "offload", ACCESS_KEYS: await verifier(bearer, host) },
+    {
+      TLS_MODE: "offload",
+      DNS_ACCESS_MODE: "private",
+      ACCESS_KEYS: await verifier(bearer, host),
+    },
     async () => {
       assert.equal((await post())[0].statusCode, 401);
       const [res, body] = await post(true);

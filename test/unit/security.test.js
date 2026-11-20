@@ -11,6 +11,7 @@ import * as dns from "../../src/commons/dnsutil.js";
 import { readBounded, readIncoming } from "../../src/commons/bounded.js";
 import { readFrame } from "../../src/commons/dns-frame.js";
 import {
+  checkWorkerBlocklistBudget,
   digest,
   fetchArtifact,
 } from "../../src/commons/blocklist-integrity.js";
@@ -28,6 +29,7 @@ import {
 import { replaceKeyCert, requestUrl } from "../../src/core/node/util.js";
 import { staticPsk } from "../../src/core/psk.js";
 import {
+  accessCredentials,
   credentials,
   auth,
   verifier,
@@ -59,7 +61,7 @@ registerHooks({
     return next(s, ctx);
   },
 });
-const { handleRequest } = await import("../../src/core/doh.js");
+const { admitPrivate, handleRequest } = await import("../../src/core/doh.js");
 const { services } = await import("../../src/core/svc.js");
 const { BlocklistWrapper } = await import(
   "../../src/plugins/rethinkdns/main.js"
@@ -96,6 +98,7 @@ function request(path, init) {
 function env(t, vars = {}) {
   globalThis.wenv = {
     CLOUD_PLATFORM: "cloudflare",
+    DNS_CACHE_ENABLED: "true",
     CF_DNS_RESOLVER_URL_2: "",
     ...vars,
   };
@@ -522,6 +525,7 @@ test("history and analytics are opt-in and scoped to structured tenant-owned rec
   env(t, {
     LOGPUSH_SRC: host,
     LOGPUSH_HISTORY: "true",
+    DNS_HISTORY_LIFECYCLE_READY: "true",
     LOGPUSH_ANALYTICS: "true",
     LOGPUSH_ANSWER_COUNTRY: "true",
   });
@@ -644,6 +648,7 @@ test("answer-country metrics follow the served answer, not the requester or an u
     LOGPUSH_ENABLED: "true",
     LOGPUSH_SRC: host,
     LOGPUSH_HISTORY: "true",
+    DNS_HISTORY_LIFECYCLE_READY: "true",
     LOGPUSH_ANALYTICS: "true",
     DNS_HISTORY: { put: async (_, data) => history.push(JSON.parse(data)) },
     METRICS: { writeDataPoint: (point) => points.push(point) },
@@ -715,7 +720,7 @@ test("answer-country metrics follow the served answer, not the requester or an u
   wenv.GEOIP_V4_PIN = `${table.length}:${"0".repeat(64)}`;
   assert.equal(await send("/dns-query"), a.data);
   await Promise.all(bg);
-  assert.equal(upstream, 1); // cache hits are measured after gateway/policy decisions too
+  assert.equal(upstream, 4); // private queries do not use the shared cache
   assert.equal(downloads, 2);
   assert.deepEqual(
     points,
@@ -957,4 +962,43 @@ test("without a native AbortController a deadline cancels a late response body w
   assert.throws(() =>
     openResponse(() => assert.fail("opened after abort"), child.signal)
   );
+});
+
+test("production access mode fails closed and private admission reserves capacity by principal", async (t) => {
+  const entry = await verifier(key, host);
+  assert.throws(() => accessCredentials(undefined, undefined, true));
+  assert.throws(() => accessCredentials("private", undefined, true));
+  assert.throws(() => accessCredentials("public", entry, true));
+  assert.deepEqual(accessCredentials("public", undefined, true), []);
+  const previous = services.userOp;
+  services.userOp = { keys: accessCredentials("private", entry, true) };
+  const leases = [];
+  t.after(() => {
+    for (const lease of leases) lease.release();
+    services.userOp = previous;
+  });
+  const authorized = request("/dns-query", {
+    headers: { authorization: `Bearer ${key}` },
+  });
+  assert.equal((await admitPrivate(request("/dns-query"))).status, 401);
+  for (let i = 0; i < 16; i++) {
+    const lease = await admitPrivate(authorized);
+    assert.equal(typeof lease.release, "function");
+    leases.push(lease);
+  }
+  assert.equal((await admitPrivate(authorized)).status, 429);
+  leases.pop().release();
+  const next = await admitPrivate(authorized);
+  assert.equal(typeof next.release, "function");
+  leases.push(next);
+});
+
+test("Worker blocklist budget applies to the combined binary sizes", () => {
+  const files = {
+    "td.txt": { size: 24 * 1024 * 1024 },
+    "rd.txt": { size: 24 * 1024 * 1024 },
+  };
+  checkWorkerBlocklistBudget({ files });
+  files["rd.txt"].size++;
+  assert.throws(() => checkWorkerBlocklistBudget({ files }), /budget/);
 });

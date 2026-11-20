@@ -1,18 +1,28 @@
-FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS setup
+FROM node:24.22.3-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS setup
 WORKDIR /app
-COPY package.json ./
-COPY scripts/audit-dependencies.sh scripts/
-RUN npm install --package-lock --ignore-scripts --omit=optional && sh scripts/audit-dependencies.sh
+COPY .node-version package.json package-lock.json ./
 COPY scripts/ scripts/
-COPY config/blocklist-manifest.json config/
 COPY src/ src/
+# The pinned bootstrap image only installs the verified Node 26 executable.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/node26/bin \
+    && node scripts/runtime-binary.mjs node /opt/node26/bin \
+    && /opt/node26/bin/node --version
+ENV PATH="/opt/node26/bin:${PATH}"
+RUN npm ci --ignore-scripts --omit=optional && sh scripts/audit-dependencies.sh
+COPY config/blocklist-manifest.json config/
 COPY webpack.node.cjs ./
 RUN npm run build:node && sh scripts/prepare.sh --assets
 
-FROM node:24.22.3-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 ENV NODE_ENV=production
 WORKDIR /app
+COPY --from=setup /opt/node26/bin/node /usr/local/bin/node
+COPY --from=setup /usr/lib/x86_64-linux-gnu/libatomic.so.1 /usr/lib/x86_64-linux-gnu/libstdc++.so.6 /usr/lib/x86_64-linux-gnu/
+COPY --from=setup /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=setup /app/dist/node.mjs ./
 COPY --from=setup /app/blocklists__ ./blocklists__/
-USER node
+USER 65532:65532
 CMD ["node", "node.mjs"]

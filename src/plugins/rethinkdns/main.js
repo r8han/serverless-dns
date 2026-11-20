@@ -8,6 +8,7 @@
 
 import {
   files,
+  checkWorkerBlocklistBudget,
   validateConfig,
   validateManifest,
   jsonBytes,
@@ -82,6 +83,8 @@ export class BlocklistWrapper {
 
   async download() {
     const manifest = cfg.manifest();
+    // Leave headroom for the trie, response caches and active requests.
+    if (envutil.isWorkers()) checkWorkerBlocklistBudget(manifest);
     const base = envutil.blocklistUrl();
     const scope = cancelScope();
     try {

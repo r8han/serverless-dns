@@ -3,8 +3,16 @@ WORKDIR /app
 COPY scripts/ scripts/
 COPY src/ src/
 COPY config/blocklist-manifest.json config/
-COPY package.json ./
-RUN node scripts/runtime-binary.mjs bun && npm install --package-lock --ignore-scripts --omit=optional && sh scripts/audit-dependencies.sh
+COPY .node-version package.json package-lock.json ./
+# The pinned bootstrap image only installs the verified Node 26 executable.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/node26/bin \
+    && node scripts/runtime-binary.mjs node /opt/node26/bin \
+    && /opt/node26/bin/node --version
+ENV PATH="/opt/node26/bin:${PATH}"
+RUN node scripts/runtime-binary.mjs bun && npm ci --ignore-scripts --omit=optional && sh scripts/audit-dependencies.sh
 RUN bun run build:bun && sh scripts/prepare.sh --assets
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
