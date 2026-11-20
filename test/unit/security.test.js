@@ -364,8 +364,7 @@ test("production startup selects only explicit modes with private offload and re
     { platform: undefined },
     { mode: "offload", privateBind: "0.0.0.0" },
     { mode: "managed" },
-    { platform: "deno-deploy" },
-    { platform: "fastly" },
+    { platform: "untrusted-edge" },
   ]) {
     assert.throws(() => listenerPolicy({ ...cfg, ...bad }));
   }

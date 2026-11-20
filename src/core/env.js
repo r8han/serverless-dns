@@ -3,7 +3,7 @@
  * common interface.
  *
  * EnvManager.get() or EnvManager.set() allow manipulation of `env` object.
- * Environment variables of runtime (deno, node, worker)
+ * Environment variables of runtime (node, bun, worker)
  *
  * @license
  * Copyright (c) 2021 RethinkDNS and its authors.
@@ -28,12 +28,6 @@ const defaults = new Map(
     // the env stage (production or development) workers is running in
     // development is always "local" (a laptop /a server, for example)
     WORKER_ENV: {
-      type: "string",
-      default: "development",
-    },
-    // the env stage deno is running in; "deno_env" seems to name-conflict
-    // github.com/serverless-dns/serverless-dns/issues/185
-    DENO_ENV_DOMAIN: {
       type: "string",
       default: "development",
     },
@@ -209,10 +203,6 @@ function caststr(x, typ) {
  * @returns {string} runtime name
  */
 function _determineRuntime() {
-  if (typeof Deno !== "undefined") {
-    return "deno";
-  }
-
   if (typeof Bun !== "undefined") {
     return "bun"; // bun.sh/guides/util/detect-bun
   }
@@ -253,7 +243,6 @@ export default class EnvManager {
     if (this.runtime === "node") return this.get("NODE_ENV");
     if (this.runtime === "bun") return this.get("BUN_ENV");
     if (this.runtime === "worker") return this.get("WORKER_ENV");
-    if (this.runtime === "deno") return this.get("DENO_ENV_DOMAIN");
     return null;
   }
 
@@ -270,7 +259,7 @@ export default class EnvManager {
     if (hasWorkersUa) return "cloudflare";
     // if dev, then whatever is running is likely local
     if (isDev) return "local";
-    if (["node", "bun", "deno"].includes(this.runtime)) return "local";
+    if (["node", "bun"].includes(this.runtime)) return "local";
     // if prod, then worker is likely running on cloudflare
     if (this.runtime === "worker") return "cloudflare";
 
@@ -312,7 +301,7 @@ export default class EnvManager {
     return env;
   }
 
-  // one of deno, nodejs, or cloudflare workers
+  // one of nodejs, bun, or cloudflare workers
   r() {
     return this.runtime;
   }
@@ -329,8 +318,6 @@ export default class EnvManager {
     } else if (this.runtime === "bun") {
       // bun.sh/guides/runtime/read-env
       v = Bun.env[k];
-    } else if (this.runtime === "deno") {
-      v = Deno.env.get(k);
     } else if (this.runtime === "worker") {
       v = globalThis.wenv[k];
     }

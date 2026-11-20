@@ -27,7 +27,6 @@ fixture/
 package-lock.json
 bun.lock
 bun.lockb
-deno.lock
 
 # Cache
 .eslintcache

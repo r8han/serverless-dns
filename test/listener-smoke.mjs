@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-// Short-lived loopback-only integration test. Requires fixture-built bundle
-// (or Deno source graph); never reads a user's configured secrets or upstreams.
+// Short-lived loopback-only integration test. Requires fixture-built bundles;
+// never reads a user's configured secrets or upstreams.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
@@ -23,7 +23,7 @@ import { verifier } from "../src/plugins/users/auth-token.js";
 import { generationDir } from "../src/core/node/artifact-file.js";
 
 const runtime = process.argv[2] || "node";
-assert.ok(["node", "bun", "deno"].includes(runtime));
+assert.ok(["node", "bun"].includes(runtime));
 const executable = process.argv[3] || runtime;
 const cwd = await mkdtemp(join(tmpdir(), "sdns-ingress-"));
 const dir = generationDir(
@@ -34,23 +34,7 @@ const testCrt = resolve("test/data/tls/dns.rethinkdns.localhost.crt");
 const tempCrt = join(cwd, "ephemeral.crt");
 const tempKey = join(cwd, "ephemeral.key");
 const testKey = resolve("test/data/tls/dns.rethinkdns.localhost.key");
-const denoApp = process.env.DENO_APP_DIR || ".";
-const args =
-  runtime === "deno"
-    ? [
-        "run",
-        ...(process.env.DENO_APP_DIR
-          ? ["--no-remote", "--no-npm"]
-          : ["--cached-only"]),
-        "--no-lock",
-        "--config",
-        resolve(denoApp, "deno.json"),
-        "--allow-read",
-        "--allow-net=127.0.0.1",
-        "--allow-env",
-        resolve(denoApp, "src/server-deno.ts"),
-      ]
-    : [resolve("dist", runtime === "bun" ? "bun.mjs" : "fly.mjs")];
+const args = [resolve("dist", runtime === "bun" ? "bun.mjs" : "fly.mjs")];
 const bearer = "b".repeat(43);
 const host = "dns.rethinkdns.localhost";
 const query = Buffer.from(mkQ(30, [{ name: "listed.example", type: "A" }]));
@@ -60,8 +44,6 @@ const base = {
   CLOUD_PLATFORM: "standalone",
   NODE_ENV: "production",
   BUN_ENV: "production",
-  DENO_ENV_DOMAIN: "production",
-  DENO_NO_UPDATE_CHECK: "1",
   TLS_CRT_PATH: testCrt,
   TLS_KEY_PATH: testKey,
   LOG_LEVEL: "info",
@@ -69,7 +51,6 @@ const base = {
   CF_DNS_RESOLVER_URL: "https://127.0.0.1:1/not-an-upstream",
   CF_BLOCKLIST_URL: "https://127.0.0.1:1/not-a-store",
 };
-if (process.env.DENO_DIR) base.DENO_DIR = process.env.DENO_DIR;
 async function launch(vars, fn) {
   const p = spawn(executable, args, {
     cwd,

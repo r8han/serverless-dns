@@ -1,7 +1,7 @@
 /**
  * Generic utility functions, shared between all runtime.
- * Functions dependent on runtime apis of deno / node.js may not be put here,
- * but should be node.js or deno specific util files.
+ * Functions dependent on runtime APIs of Node.js or the Workers runtime may
+ * not be put here, but should be in runtime-specific util files.
  *
  * @license
  * Copyright (c) 2021 RethinkDNS and its authors.
@@ -183,7 +183,7 @@ export function timedOp(op, ms, cleanup = (x) => {}) {
   });
 }
 
-// TODO: Use AbortSignal.timeout (supported on Node and Deno, too)?
+// TODO: Use AbortSignal.timeout (supported on Node)?
 // developers.cloudflare.com/workers/platform/changelog#2021-12-10
 /**
  *
@@ -394,8 +394,6 @@ export function emptyObj(x) {
 
 export function emptyMap(m) {
   if (!m) return true;
-  // does not hold good on Deno
-  // if (!m.__proto__.hasOwnProperty("size")) return true;
   return m.size === 0;
 }
 
@@ -565,7 +563,6 @@ export function mkFetchEvent(r, ...fns) {
   }
   // developer.mozilla.org/en-US/docs/Web/API/FetchEvent
   // developers.cloudflare.com/workers/runtime-apis/fetch-event
-  // deno.land/manual/runtime/http_server_apis#http-requests-and-responses
   // a service-worker event, with properties: type and request; and methods:
   // respondWith(Response), waitUntil(Promise), passThroughOnException(void)
   return {

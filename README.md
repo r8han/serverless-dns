@@ -48,7 +48,7 @@ npm test
 npm run lint
 ```
 
-No npm, Bun or Deno lockfile is checked in. Direct dependencies are pinned, but separate installs can resolve different transitive versions. `npm run audit:dependencies` checks the build’s npm resolution, or resolves in a temporary directory if no local lock exists.
+No npm or Bun lockfile is checked in. Direct dependencies are pinned, but separate installs can resolve different transitive versions. `npm run audit:dependencies` checks the build’s npm resolution, or resolves in a temporary directory if no local lock exists.
 
 The tests use synthetic lists and mocked or loopback upstreams. They do not require a cloud account or production files. For an **offline fixture** bundle and Worker smoke in a disposable checkout:
 
@@ -62,13 +62,11 @@ node test/worker-smoke.mjs
 npm run build:fly && node test/listener-smoke.mjs node
 ```
 
-Discard the disposable checkout and fixture after testing. Never set those two fixture variables on a release runner. `./run node|bun|deno|workers|fly` prepares trusted metadata before building or starting the respective service (Wrangler does so via its build command). Local Node/Bun/Deno termination defaults to loopback with the public test identity, **for development only**. Use `./run profile` for an offline CPU profile. See the [runtime test matrix](docs/security/rollout.md#release-gates).
+Discard the disposable checkout and fixture after testing. Never set those two fixture variables on a release runner. `./run node|bun|workers|fly` prepares trusted metadata before building or starting the respective service (Wrangler does so via its build command). Local Node/Bun termination defaults to loopback with the public test identity, **for development only**. Use `./run profile` for an offline CPU profile. See the [runtime test matrix](docs/security/rollout.md#release-gates).
 
-#### Optional Deno checks
+#### Checks
 
-Pull requests run the unit, Node, Bun and Workers checks. Deno remains an optional **local** runtime for development; use **Actions → PR checks → Run workflow** and select `deno` (Deno 2.5.6) to run its type check, conformance and loopback listener checks. These checks use fixtures and do not deploy.
-
-The container release builds Node and Bun. Every selected target still needs its verification and approval gates.
+Pull requests run the unit, Node, Bun and Workers fixture checks; these do not deploy. The container release builds Node and Bun. Every selected target still needs its verification and approval gates.
 
 #### Filtering and forwarding
 
@@ -92,7 +90,6 @@ The program writes the bearer with mode `0600` and prints only a `host|verifier`
 | Target | Entrypoint | Configuration |
 |---|---|---|
 | Cloudflare Worker | `src/server-workers.js` | `wrangler.toml`; production `WORKER_ENV=production` |
-| Deno (local development) | `src/server-deno.ts` | `deno.json`, `import_map.json`, `DENO_ENV_DOMAIN=production` |
 | Node / Bun | `src/server-node.js` | `NODE_ENV=production` / `BUN_ENV=production`, `fly.toml` or `fly.tls.toml` |
 
-For local termination use `TLS_MODE=terminate` and mount `TLS_KEY_PATH` / `TLS_CRT_PATH`. In production specify `CLOUD_PLATFORM=standalone` or `fly`. To offload TLS at a trusted gateway use `TLS_MODE=offload` with a private backend that forwards cleartext DoH (Node accepts HTTP/1.1 or h2c on that port); **no** cleartext DoT substitute. Stamps on Deno DoT require a fixed `DOT_POLICY`. PSK is a separately provisioned Node TLS optimization, not DNS access control. Telemetry export and history reads are **off by default**. Workers can optionally [report the country of the DNS answer IP](docs/security/rollout.md#answer-country-breakdown-off-by-default), without exporting the IP or geolocating the requester. See the [migration, pinning and operator checklist](docs/security/rollout.md) before changing any of these settings.
+For local termination use `TLS_MODE=terminate` and mount `TLS_KEY_PATH` / `TLS_CRT_PATH`. In production specify `CLOUD_PLATFORM=standalone` or `fly`. To offload TLS at a trusted gateway use `TLS_MODE=offload` with a private backend that forwards cleartext DoH (Node accepts HTTP/1.1 or h2c on that port); **no** cleartext DoT substitute. PSK is a separately provisioned Node TLS optimization, not DNS access control. Telemetry export and history reads are **off by default**. Workers can optionally [report the country of the DNS answer IP](docs/security/rollout.md#answer-country-breakdown-off-by-default), without exporting the IP or geolocating the requester. See the [migration, pinning and operator checklist](docs/security/rollout.md) before changing any of these settings.

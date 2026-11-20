@@ -307,7 +307,7 @@ function systemUp() {
   const maxconns = envutil.maxconns();
   // see also: dns-transport.js:ioTimeout
   const ioTimeoutMs = envutil.ioTimeoutMs();
-  const supportsHttp2 = envutil.isNode() || envutil.isDeno();
+  const supportsHttp2 = envutil.isNode();
   const isBun = envutil.isBun();
   const tlsPsk = !isBun && psk.staticPsk(envManager.get("TLS_PSK"));
   const allowTlsPsk = Boolean(tlsPsk);

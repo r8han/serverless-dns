@@ -8,9 +8,6 @@ module.exports = {
   // devtool: 'eval-cheap-module-source-map',
 
   plugins: [
-    new webpack.IgnorePlugin({
-      resourceRegExp: /(\/deno\/.*\.ts$)|(.*-deno\.ts$)|(.*\.deno\.ts$)/,
-    }),
     // stackoverflow.com/a/60325769
     new webpack.optimize.LimitChunkCountPlugin({
       maxChunks: 1,

@@ -4,7 +4,6 @@
 !src/
 !src/**/
 !src/**/*.js
-!src/**/*.ts
 !scripts/
 !scripts/*.mjs
 !scripts/*.sh

@@ -7,8 +7,8 @@ import {
 } from "node:crypto";
 import { isIP } from "node:net";
 
-// Shared with standalone Deno. Do not infer a trusted edge from NODE_ENV or
-// from a missing certificate. Offload addresses must be literal private IPs.
+// Do not infer a trusted edge from NODE_ENV or from a missing certificate.
+// Offload addresses must be literal private IPs.
 /** @param {{production:boolean, platform?:string, mode?:string, privateBind?:string, tlsBind?:string}} options */
 export function listenerPolicy({
   production,

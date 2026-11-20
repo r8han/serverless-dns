@@ -56,12 +56,6 @@ export function isNode() {
   return envManager.r() === "node";
 }
 
-export function isDeno() {
-  if (!envManager) return false;
-
-  return envManager.r() === "deno";
-}
-
 /**
  * in milliseconds
  */

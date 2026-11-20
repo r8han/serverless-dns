@@ -2,12 +2,6 @@ name: PR checks
 on:
   pull_request:
   workflow_dispatch:
-    inputs:
-      target:
-        description: 'Fixture checks only (no deployment)'
-        type: choice
-        default: core
-        options: [core, deno]
 permissions: { contents: read }
 jobs:
   test:
@@ -27,8 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Only an explicit manual choice can select the optional Deno runtime.
-        target: ${{ fromJSON(inputs.target == 'deno' && '["deno"]' || '["node","bun","worker"]') }}
+        target: ["node", "bun", "worker"]
     # No secrets, deploy credentials, shared caches or publishable artifacts.
     env:
       BLOCKLIST_VERSION: 2024/1706100000000
@@ -45,13 +38,6 @@ jobs:
         run: npm run build:fly && node test/listener-smoke.mjs node
       - if: matrix.target == 'worker'
         run: npm run build && node test/worker-smoke.mjs && ./node_modules/.bin/wrangler deploy --dry-run --env prod
-      - if: matrix.target == 'deno'
-        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
-        with: { deno-version: 2.5.6 }
-      - if: matrix.target == 'deno'
-        run: |
-          deno check --no-lock src/server-deno.ts && deno run --no-lock test/conformance.mjs
-          node test/listener-smoke.mjs deno
       - if: matrix.target == 'bun'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: 1.3.3 }
