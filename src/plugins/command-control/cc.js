@@ -241,7 +241,7 @@ async function domainNameToList(
       name: domainName,
     },
   ];
-  // only doh truly works across runtimes, workers/fastly/node/deno
+  // only doh truly works across runtimes, workers/node/bun
   const forcedoh = true;
   const query = dnsutil.mkQ(qid, qs);
   const querypacket = dnsutil.decode(query);

@@ -68,7 +68,7 @@ export async function replaceKeyCert(replacing) {
     // TODO: bind "who" to msg?
     const msg = bufutil.fromStr(url.pathname);
     const authz = await hmacsign(mackey, msg);
-    const who = envutil.hostId(); // never empty on fly
+    const who = envutil.hostId(); // may be empty on Workers
     const req = new Request(url, {
       method: "GET",
       redirect: "error",

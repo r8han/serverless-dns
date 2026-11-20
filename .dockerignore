@@ -4,7 +4,6 @@
 !src/
 !src/**/
 !src/**/*.js
-!src/**/*.ts
 !scripts/
 !scripts/*.mjs
 !scripts/*.sh
@@ -13,6 +12,4 @@
 !config/blocklist-manifest.json
 !LICENSE
 !package.json
-!deno.json
-!import_map.json
-!webpack.fly.cjs
+!webpack.node.cjs

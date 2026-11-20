@@ -8,9 +8,6 @@ module.exports = {
   // devtool: 'eval-cheap-module-source-map',
 
   plugins: [
-    new webpack.IgnorePlugin({
-      resourceRegExp: /(\/deno\/.*\.ts$)|(.*-deno\.ts$)|(.*\.deno\.ts$)/,
-    }),
     // stackoverflow.com/a/60325769
     new webpack.optimize.LimitChunkCountPlugin({
       maxChunks: 1,
@@ -43,14 +40,14 @@ module.exports = {
       type: "module",
     },
     clean: true,
-    filename: "fly.mjs",
+    filename: "node.mjs",
     module: true,
   },
 
   // or, cjs: stackoverflow.com/a/68916455
   /*
   output: {
-    filename: "fly.cjs",
+    filename: "node.cjs",
     clean: true, // empty dist before output
   },
   */

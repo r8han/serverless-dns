@@ -363,20 +363,12 @@ test("production startup selects only explicit modes with private offload and re
     { mode: undefined },
     { platform: undefined },
     { mode: "offload", privateBind: "0.0.0.0" },
-    { mode: "managed", platform: "deno-deploy" },
+    { mode: "managed" },
+    { platform: "untrusted-edge" },
   ]) {
     assert.throws(() => listenerPolicy({ ...cfg, ...bad }));
   }
   assert.equal(listenerPolicy({ ...cfg, mode: "offload" }).host, "127.0.0.1");
-  assert.equal(
-    listenerPolicy({
-      ...cfg,
-      mode: "managed",
-      platform: "deno-deploy",
-      managedDeno: true,
-    }).mode,
-    "managed"
-  );
   const crt = (ext) =>
     readFileSync(
       new URL("../data/tls/dns.rethinkdns.localhost." + ext, import.meta.url)

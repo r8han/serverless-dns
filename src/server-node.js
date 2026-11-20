@@ -307,7 +307,7 @@ function systemUp() {
   const maxconns = envutil.maxconns();
   // see also: dns-transport.js:ioTimeout
   const ioTimeoutMs = envutil.ioTimeoutMs();
-  const supportsHttp2 = envutil.isNode() || envutil.isDeno();
+  const supportsHttp2 = envutil.isNode();
   const isBun = envutil.isBun();
   const tlsPsk = !isBun && psk.staticPsk(envManager.get("TLS_PSK"));
   const allowTlsPsk = Boolean(tlsPsk);
@@ -345,7 +345,7 @@ function systemUp() {
   };
 
   if (tlsoffload) {
-    // fly.io terminated tls?
+    // gateway terminated tls?
     const portdoh = envutil.dohCleartextBackendPort();
     const dohOpts = {
       port: portdoh,
@@ -447,8 +447,7 @@ function systemUp() {
   }
 
   const portcheck = envutil.httpCheckPort();
-  const checkHost =
-    (envutil.onFly() && process.env.FLY_PRIVATE_IP) || "127.0.0.1";
+  const checkHost = "127.0.0.1";
   const hcheck = http
     .createServer(serve200)
     .listen(portcheck, checkHost, () => {
@@ -744,7 +743,6 @@ function trapSecureServerEvents(id, s) {
 
   s.on("tlsClientError", (err, /** @type {TLSSocket} */ tlsSocket) => {
     stats.tlserr += 1;
-    // fly tcp healthchecks also trigger tlsClientErrors
     // log.d("tls: client err;", err.message, addrstr(tlsSocket));
     close(tlsSocket);
   });
@@ -1227,7 +1225,7 @@ function adjustMaxConns(n) {
 function bye() {
   // in some cases, node stops listening but the process doesn't exit because
   // of other unreleased resources (see: svc.js#systemStop); and so exit with
-  // success (exit code 0) regardless; ref: community.fly.io/t/4547/6
+  // success (exit code 0) regardless; the supervisor decides on restarts.
   log2.w("W game over");
 
   process.exit(0);

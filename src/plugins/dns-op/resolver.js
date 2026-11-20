@@ -35,7 +35,6 @@ export default class DNSResolver {
     this.blocker = new DnsBlocker();
     /** @type {import("../rethinkdns/main.js").BlocklistWrapper} */
     this.bw = blocklistWrapper;
-    // deno bundler not happy with typedef as it imports node:dgram
     // @type {import("../../core/node/dns-transport.js").Transport}
     this.transport = dns53 || null;
     this.log = log.withTags("DnsResolver");
@@ -103,7 +102,6 @@ export default class DNSResolver {
 
   // TODO: nodejs.org/api/perf_hooks.html
   // github: pola-rs/polars@475cf3c/nodejs-polars/benches/list-operations.js
-  // Deno perf-hooks: github.com/denoland/deno/issues/5386
   // WebAPI: developer.mozilla.org/en-US/docs/Web/API/Performance
   logMeasurementsPeriodically(period = 100) {
     const len = this.measurements.length - 1;

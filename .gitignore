@@ -11,7 +11,6 @@ src/.blocklist-metadata-*
 
 *.cpuprofile
 fixture/
-/release/
 **basicconfig.json
 **filetag.json
 *.log
@@ -28,9 +27,7 @@ fixture/
 package-lock.json
 bun.lock
 bun.lockb
-deno.lock
 
 # Cache
 .eslintcache
-bin/main.wasm
 pkg/serverless-dns.tar.gz

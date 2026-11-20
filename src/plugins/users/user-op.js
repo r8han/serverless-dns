@@ -18,7 +18,7 @@ import { UserCache } from "./user-cache.js";
 const cacheSize = 20000;
 
 // use fixed doh upstream for these domains,
-// instead of either recursing (on Fly.io)
+// instead of recursing
 const delegated = new Set(["ipv4only.arpa"]);
 
 export class UserOp {

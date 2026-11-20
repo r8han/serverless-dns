@@ -19,7 +19,7 @@ docker exec "$name" sh -ec '
   unexpected=$(find /app \( -type l -o -name node_modules -o -name .git -o -name ".env*" -o -name ".dev.vars*" -o -name .npmrc -o -name "*.key" -o -name "*.pem" \) -print -quit)
   test -z "$unexpected"
 '
-case "$runtime" in node|bun) set -- "$runtime" -e;; deno) set -- deno eval;; *) exit 2;; esac
+case "$runtime" in node|bun) set -- "$runtime" -e;; *) exit 2;; esac
 # dntouint requires an installed filter and performs a trie lookup; it does
 # not forward DNS or need to know which names the production policy blocks.
 docker exec "$name" "$@" '(async () => {

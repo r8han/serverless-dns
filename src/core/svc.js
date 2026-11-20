@@ -12,7 +12,6 @@ import * as util from "../commons/util.js";
 import { CommandControl } from "../plugins/command-control/cc.js";
 import {
   DNSCacheResponder,
-  DNSPrefilter,
   DNSResolver,
   DnsCache,
 } from "../plugins/dns-op/dns-op.js";
@@ -33,8 +32,6 @@ export const services = {
   blocklistWrapper: null,
   /** @type {UserOp?} userOp */
   userOp: null,
-  /** @type {DNSPrefilter?} prefilter */
-  prefilter: null,
   /** @type {CommandControl?} commandControl */
   commandControl: null,
   /** @type {DNSCacheResponder?} dnsCacheHandler */
@@ -62,7 +59,7 @@ async function systemReady(args) {
     services.userOp = new UserOp();
   } catch {
     log.e("invalid authentication configuration; resolver unavailable");
-    if (envManager.r() === "worker" || envManager.r() === "fastly") {
+    if (envManager.r() === "worker") {
       system.pub("go"); // handleRequest will reject while services.ready is false
       return;
     }
@@ -75,7 +72,6 @@ async function systemReady(args) {
 
   services.blocklistWrapper = bw;
   services.logPusher = lp;
-  services.prefilter = new DNSPrefilter();
   services.dnsCacheHandler = new DNSCacheResponder(bw, cache);
   services.dnsResolver = new DNSResolver(bw, cache, dns53);
   services.commandControl = new CommandControl(bw, services.dnsResolver, lp);

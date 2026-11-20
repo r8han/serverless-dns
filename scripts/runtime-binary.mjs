@@ -6,11 +6,6 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { readBounded } from "../src/commons/bounded.js";
 const pins = {
-  deno: [
-    "@deno/linux-x64-glibc/-/linux-x64-glibc-2.5.6.tgz",
-    "aYct9Vp1RgKR2yW9hyWGTIL0EN0MgqaBuD0fbnQHygd4ftSfd/aWcBB3+n7OTUX/YNWSxYkOMLV1N8RWUCj4jw==",
-    "package/deno",
-  ],
   bun: [
     "@oven/bun-linux-x64/-/bun-linux-x64-1.3.3.tgz",
     "7eIARtKZKZDtah1aCpQUj/1/zT/zHRR063J6oAxZP9AuA547j5B9OM2D/vi/F4En7Gjk9FPjgPGTSYeqpQDzJw==",
