@@ -203,7 +203,9 @@ export default class DNSResolver {
     const start = this.profileResolve ? Date.now() : 0;
     let answer;
     if (fromMax) {
-      dispatcher(this.bw.init(rxid));
+      // A failed install must not surface as an unhandled rejection: this
+      // request answered from the approved endpoint, and the next one retries.
+      dispatcher(this.bw.init(rxid).catch(() => {}));
       // Only this operator-approved endpoint can apply the user's blockstamp.
       // Do not race it against an unfiltered answer in the shared cache.
       answer = await this.queryDoh(

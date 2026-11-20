@@ -38,7 +38,6 @@
     "@serverless-dns/dns-parser": "https://codeload.github.com/serverless-dns/dns-parser/tar.gz/b7d73b3d7aca64575887758cb75de599fa3e4c01",
     "@serverless-dns/lfu-cache": "https://codeload.github.com/serverless-dns/lfu-cache/tar.gz/41ab26202166e8a9ebee8e7d1e9da3a7293f3f5d",
     "@serverless-dns/trie": "https://codeload.github.com/serverless-dns/trie/tar.gz/6a67356a6856a4173b646112fb90e763fc3156c2",
-    "httpx-server": "2.0.0",
     "proxy-protocol-js": "4.0.6"
   },
   "devDependencies": {
