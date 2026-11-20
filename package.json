@@ -12,15 +12,12 @@
     "clean:wrangler": "rm -rf worker/ dist/",
     "test": "node --test test/unit/*.test.js",
     "build": "sh scripts/prepare.sh && webpack --config webpack.config.cjs",
-    "build:fastly": "sh scripts/prepare.sh && webpack --config webpack.fastly.cjs && npm run fastly:wasm",
     "build:fly": "sh scripts/prepare.sh && webpack --config webpack.fly.cjs",
     "build:flybun": "sh scripts/prepare.sh && bun build ./src/server-node.js --production --target node --outdir ./dist --entry-naming bun.mjs --format esm",
-    "fastly:wasm": "sh scripts/fastly-wasm.sh",
     "blocklists:prepare": "sh scripts/prepare.sh",
     "lint": "eslint --quiet --ext .js,.mjs,.cjs src test/unit test/*.mjs scripts",
     "access-key": "node scripts/access-key.mjs",
-    "audit:dependencies": "sh scripts/audit-dependencies.sh",
-    "setup:fastly": "npm --prefix tools/fastly install --ignore-scripts --no-package-lock"
+    "audit:dependencies": "sh scripts/audit-dependencies.sh"
   },
   "repository": {
     "type": "git",

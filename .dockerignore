@@ -13,6 +13,4 @@
 !config/blocklist-manifest.json
 !LICENSE
 !package.json
-!deno.json
-!import_map.json
 !webpack.fly.cjs

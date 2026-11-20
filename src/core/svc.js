@@ -62,7 +62,7 @@ async function systemReady(args) {
     services.userOp = new UserOp();
   } catch {
     log.e("invalid authentication configuration; resolver unavailable");
-    if (envManager.r() === "worker" || envManager.r() === "fastly") {
+    if (envManager.r() === "worker") {
       system.pub("go"); // handleRequest will reject while services.ready is false
       return;
     }

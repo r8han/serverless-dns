@@ -37,11 +37,6 @@ const defaults = new Map(
       type: "string",
       default: "development",
     },
-    // the env stage fastly is running in
-    FASTLY_ENV: {
-      type: "string",
-      default: "development",
-    },
     // the env stage nodejs is running in
     NODE_ENV: {
       type: "string",
@@ -52,7 +47,7 @@ const defaults = new Map(
       type: "string",
       default: "development",
     },
-    // the cloud-platform code is deployed on (cloudflare, fly, deno-deploy, fastly)
+    // the cloud-platform code is deployed on (cloudflare, fly)
     CLOUD_PLATFORM: {
       type: "string",
       // also ref: EnvManager.mostLikelyCloudPlatform()
@@ -214,10 +209,6 @@ function caststr(x, typ) {
  * @returns {string} runtime name
  */
 function _determineRuntime() {
-  if (globalThis.fastlyEnv) {
-    return "fastly";
-  }
-
   if (typeof Deno !== "undefined") {
     return "deno";
   }
@@ -263,7 +254,6 @@ export default class EnvManager {
     if (this.runtime === "bun") return this.get("BUN_ENV");
     if (this.runtime === "worker") return this.get("WORKER_ENV");
     if (this.runtime === "deno") return this.get("DENO_ENV_DOMAIN");
-    if (this.runtime === "fastly") return this.get("FASTLY_ENV");
     return null;
   }
 
@@ -272,21 +262,17 @@ export default class EnvManager {
     const isDev = this.determineEnvStage() === "development";
     // FLY_ALLOC_ID=5778f6b7-3cc2-d011-36b1-dfe057b0dc79 is set on fly-vms
     const hasFlyAllocId = this.get("FLY_ALLOC_ID") != null;
-    // github.com/denoland/deploy_feedback/issues/73
-    const hasDenoDeployId = this.get("DENO_DEPLOYMENT_ID") != null;
     const hasWorkersUa =
       typeof navigator !== "undefined" &&
       navigator.userAgent === "Cloudflare-Workers";
 
     if (hasFlyAllocId) return "fly";
-    if (hasDenoDeployId) return "deno-deploy";
     if (hasWorkersUa) return "cloudflare";
     // if dev, then whatever is running is likely local
     if (isDev) return "local";
     if (["node", "bun", "deno"].includes(this.runtime)) return "local";
     // if prod, then worker is likely running on cloudflare
     if (this.runtime === "worker") return "cloudflare";
-    if (this.runtime === "fastly") return "fastly";
 
     return null;
   }
@@ -295,9 +281,6 @@ export default class EnvManager {
   mostRelevantHostId(cloud) {
     if (cloud === "local") return "localhost";
     if (cloud === "fly") return this.get("FLY_MACHINE_ID") || "";
-    if (cloud === "deno-deploy") {
-      return this.get("DENO_REGION") + ":" + this.get("DENO_DEPLOYMENT_ID");
-    }
     return "";
   }
 
@@ -329,7 +312,7 @@ export default class EnvManager {
     return env;
   }
 
-  // one of deno, nodejs, fastly, or cloudflare workers
+  // one of deno, nodejs, or cloudflare workers
   r() {
     return this.runtime;
   }
@@ -348,8 +331,6 @@ export default class EnvManager {
       v = Bun.env[k];
     } else if (this.runtime === "deno") {
       v = Deno.env.get(k);
-    } else if (this.runtime === "fastly") {
-      v = fastlyEnv.get(k);
     } else if (this.runtime === "worker") {
       v = globalThis.wenv[k];
     }

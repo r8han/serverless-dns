@@ -20,18 +20,6 @@ export function onFly() {
   return envManager.get("CLOUD_PLATFORM") === "fly";
 }
 
-export function onDenoDeploy() {
-  if (!envManager) return false;
-
-  return envManager.get("CLOUD_PLATFORM") === "deno-deploy";
-}
-
-export function onFastly() {
-  if (!envManager) return false;
-
-  return envManager.get("CLOUD_PLATFORM") === "fastly";
-}
-
 export function onCloudflare() {
   if (!envManager) return false;
 
@@ -43,7 +31,7 @@ export function onCloudflare() {
 export function onLocal() {
   if (!envManager) return false;
 
-  return !onFly() && !onDenoDeploy() && !onCloudflare() && !onFastly();
+  return !onFly() && !onCloudflare();
 }
 
 export function hasHttpCache() {
@@ -60,12 +48,6 @@ export function isWorkers() {
   if (!envManager) return false;
 
   return envManager.r() === "worker";
-}
-
-export function isFastly() {
-  if (!envManager) return false;
-
-  return envManager.r() === "fastly";
 }
 
 export function isNode() {

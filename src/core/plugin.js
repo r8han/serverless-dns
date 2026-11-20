@@ -387,8 +387,6 @@ function getRegion(request) {
     return util.regionFromCf(request);
   } else if (envutil.onFly()) {
     return envutil.region();
-  } else if (envutil.onFastly()) {
-    // TODO: impl for fastly
   }
   return "";
 }

@@ -84,7 +84,6 @@ function systemUp() {
     mode: Deno.env.get("TLS_MODE"),
     tlsBind: Deno.env.get("TLS_BIND"),
     privateBind: Deno.env.get("OFFLOAD_BIND") || Deno.env.get("FLY_PRIVATE_IP"),
-    managedDeno: !!Deno.env.get("DENO_DEPLOYMENT_ID"),
   });
   if (
     (envManager?.get("TLS_OFFLOAD") && policy.mode !== "offload") ||
@@ -138,7 +137,6 @@ function systemUp() {
   }
 
   async function startDotIfPossible() {
-    // No DoT on Deno Deploy which supports only http workloads
     if (!dotls || !fixed || envutil.requiresHeaderAuth()) return;
 
     // doc.deno.land/deno/stable/~/Deno.listenTls

@@ -26,7 +26,6 @@ function prep() {
   if (!Deno) throw new Error("failed loading deno-specific config");
 
   const isProd = Deno.env.get("DENO_ENV_DOMAIN") === "production";
-  const onDenoDeploy = Deno.env.get("CLOUD_PLATFORM") === "deno-deploy";
   const profiling = Deno.env.get("PROFILE_DNS_RESOLVES") === "true";
 
   globalThis.envManager = new EnvManager();
@@ -34,7 +33,7 @@ function prep() {
   const logger = new Log({
     level: globalThis.envManager.get("LOG_LEVEL") as LogLevels,
     levelize: isProd || profiling, // levelize if prod or profiling
-    withTimestamps: !onDenoDeploy, // do not log ts on deno-deploy
+    withTimestamps: true,
   });
   setLogger(logger);
 
@@ -49,10 +48,6 @@ async function up() {
   }
 
   const bw = services.blocklistWrapper;
-  if (Deno.env.get("CLOUD_PLATFORM") === "deno-deploy") {
-    system.pub("go"); // no filesystem or process signal handlers on managed Deploy
-    return;
-  }
   if (bw != null && !bw.disabled()) {
     await blocklists.setup(bw);
   } else {

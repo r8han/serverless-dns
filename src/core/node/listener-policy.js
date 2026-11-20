@@ -9,18 +9,14 @@ import { isIP } from "node:net";
 
 // Shared with standalone Deno. Do not infer a trusted edge from NODE_ENV or
 // from a missing certificate. Offload addresses must be literal private IPs.
-/** @param {{production:boolean, platform?:string, mode?:string, privateBind?:string, tlsBind?:string, managedDeno?:boolean}} options */
+/** @param {{production:boolean, platform?:string, mode?:string, privateBind?:string, tlsBind?:string}} options */
 export function listenerPolicy({
   production,
   platform,
   mode,
   privateBind,
   tlsBind = undefined,
-  managedDeno = false,
 }) {
-  if (platform === "deno-deploy" && managedDeno && mode === "managed") {
-    return { mode, host: "0.0.0.0" };
-  }
   if (!production) {
     mode ||= "terminate";
     platform ||= "local";

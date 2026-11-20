@@ -1,16 +1,8 @@
 name: Scan and promote container
-on:
-  workflow_dispatch:
-    inputs:
-      include_deno:
-        description: 'Also build, scan and promote the optional Deno image'
-        type: boolean
-        default: false
+on: workflow_dispatch
 permissions: { contents: read }
 jobs:
   checks:
-    outputs:
-      runtimes: ${{ inputs.include_deno && '["node","bun","deno"]' || '["node","bun"]' }}
     if: github.ref == 'refs/heads/main' && github.ref_protected
     runs-on: ubuntu-latest
     steps:
@@ -23,7 +15,7 @@ jobs:
     needs: checks
     strategy:
       matrix:
-        runtime: ${{ fromJSON(needs.checks.outputs.runtimes) }}
+        runtime: ["node", "bun"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -53,7 +45,7 @@ jobs:
     needs: [checks, verify]
     strategy:
       matrix:
-        runtime: ${{ fromJSON(needs.checks.outputs.runtimes) }}
+        runtime: ["node", "bun"]
     environment: production-images
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write, attestations: write, id-token: write }
