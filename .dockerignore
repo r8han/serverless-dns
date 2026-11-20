@@ -12,6 +12,6 @@
 !config/blocklist-manifest.json
 !LICENSE
 !package.json
-!webpack.node.cjs
+!rspack.node.cjs
 !package-lock.json
 !.node-version

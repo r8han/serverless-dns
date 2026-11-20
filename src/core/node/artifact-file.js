@@ -27,7 +27,7 @@ export async function readBinary(dir, name, size) {
       throw new Error("invalid blocklist size");
     }
     const data = new Uint8Array(size);
-    for (let i = 0; i < size; ) {
+    for (let i = 0; i < size;) {
       const { bytesRead } = await file.read(data, i, size - i, i);
       if (!bytesRead) throw new Error("short blocklist file");
       i += bytesRead;

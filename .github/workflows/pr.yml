@@ -35,9 +35,16 @@ jobs:
         run: npm ci --ignore-scripts
       - run: node test/prepare-fixture.mjs fixture && cp fixture/blocklist-metadata.json src/
       - if: matrix.target == 'node'
-        run: npm run build:node && node test/listener-smoke.mjs node
+        run: |
+          npm run build:node
+          test "$(ls -A dist)" = node.mjs
+          node test/listener-smoke.mjs node
       - if: matrix.target == 'worker'
-        run: npm run build && node test/worker-smoke.mjs && ./node_modules/.bin/wrangler deploy --dry-run --env prod
+        run: |
+          npm run build
+          test "$(ls -A dist)" = worker.js
+          node test/worker-smoke.mjs
+          ./node_modules/.bin/wrangler deploy --dry-run --env prod
       - if: matrix.target == 'bun'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: { bun-version: 1.4.5 }

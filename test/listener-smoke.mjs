@@ -37,6 +37,8 @@ const testKey = resolve("test/data/tls/dns.rethinkdns.localhost.key");
 const args = [resolve("dist", runtime === "bun" ? "bun.mjs" : "node.mjs")];
 const bearer = "b".repeat(43);
 const host = "dns.rethinkdns.localhost";
+const dohPort = 8055;
+const dotPort = 10000;
 const query = Buffer.from(mkQ(30, [{ name: "listed.example", type: "A" }]));
 const base = {
   PATH: process.env.PATH,
@@ -75,9 +77,14 @@ async function launch(vars, fn) {
       );
       return;
     }
+    // The health listener can start before the DNS listener under test.
+    const port = vars.TLS_MODE === "offload" ? dohPort : dotPort;
     await new Promise((yes, no) => {
+      const ready = new RegExp(
+        String.raw`listening on: \[127\.0\.0\.1\]:${port}\b`
+      );
       const check = () => {
-        if (/listening on:|up DoH|Listening on http/.test(output)) {
+        if (ready.test(output)) {
           p.stdout.off("data", check);
           p.stderr.off("data", check);
           yes();
@@ -86,9 +93,14 @@ async function launch(vars, fn) {
       p.stdout.on("data", check);
       p.stderr.on("data", check);
       exit.then(() => no(new Error("exited before listening: " + output)), no);
+      check();
     });
     await fn();
     assert.ok(!output.includes(bearer));
+  } catch (err) {
+    throw new Error(`${runtime} listener smoke failed: ${err.message}`, {
+      cause: err,
+    });
   } finally {
     clearTimeout(stop);
     if (p.exitCode === null && p.signalCode === null) {
@@ -102,7 +114,7 @@ function post(authorized = false) {
     const req = request(
       {
         hostname: "127.0.0.1",
-        port: 8055,
+        port: dohPort,
         path: "/1:AIAAgA",
         method: "POST",
         headers: {
@@ -128,7 +140,7 @@ async function dot(usePsk = false) {
   const framed = Buffer.concat([Buffer.from([0, query.length]), query]);
   const socket = connect({
     host: "127.0.0.1",
-    port: 10000,
+    port: dotPort,
     servername: "1-acaabaa." + host,
     ca: await readFile(tempCrt),
     ...(usePsk
