@@ -11,11 +11,11 @@
     "clean:node": "rm -rf node_modules/",
     "clean:wrangler": "rm -rf worker/ dist/",
     "test": "node --test test/unit/*.test.js",
-    "build": "sh scripts/prepare.sh --worker && webpack --config webpack.config.cjs",
-    "build:node": "sh scripts/prepare.sh && webpack --config webpack.node.cjs",
+    "build": "sh scripts/prepare.sh --worker && rspack build --config rspack.config.cjs",
+    "build:node": "sh scripts/prepare.sh && rspack build --config rspack.node.cjs",
     "build:bun": "sh scripts/prepare.sh && bun build ./src/server-node.js --production --target node --outdir ./dist --entry-naming bun.mjs --format esm",
     "blocklists:prepare": "sh scripts/prepare.sh",
-    "lint": "eslint --quiet --ext .js,.mjs,.cjs src test/unit test/*.mjs scripts",
+    "lint": "eslint --quiet src test/unit \"test/*.mjs\" scripts",
     "access-key": "node scripts/access-key.mjs",
     "audit:dependencies": "sh scripts/audit-dependencies.sh"
   },
@@ -33,24 +33,23 @@
   },
   "dependencies": {
     "@serverless-dns/dns-parser": "https://codeload.github.com/serverless-dns/dns-parser/tar.gz/b7d73b3d7aca64575887758cb75de599fa3e4c01",
-    "@serverless-dns/lfu-cache": "https://codeload.github.com/serverless-dns/lfu-cache/tar.gz/41ab26202166e8a9ebee8e7d1e9da3a7293f3f5d",
+    "@serverless-dns/lfu-cache": "https://codeload.github.com/serverless-dns/lfu-cache/tar.gz/2812043995e23181130e86540df488c588717308",
     "@serverless-dns/trie": "https://codeload.github.com/serverless-dns/trie/tar.gz/6a67356a6856a4173b646112fb90e763fc3156c2"
   },
   "devDependencies": {
-    "@types/node": "16.18.126",
+    "@rspack/cli": "2.3.3",
+    "@rspack/core": "2.3.3",
+    "@types/node": "26.6.6",
     "buffer": "6.0.3",
-    "eslint": "8.57.1",
+    "eslint": "10.15.0",
     "eslint-config-google": "0.14.0",
-    "eslint-plugin-prettier": "4.2.5",
-    "prettier": "2.5.1",
-    "webpack": "5.112.2",
-    "webpack-cli": "4.10.0",
+    "eslint-plugin-prettier": "5.5.7",
+    "globals": "17.14.0",
+    "miniflare": "5.20261119.0-beta",
+    "prettier": "3.10.1",
     "why-is-node-running": "3.2.3",
-    "wrangler": "4.164.0"
+    "wrangler": "4.166.0"
   },
-  "eslintIgnore": [
-    "src/core/cfg.js"
-  ],
   "overrides": {
     "@serverless-dns/lfu-cache": "$@serverless-dns/lfu-cache"
   }

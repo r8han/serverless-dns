@@ -11,9 +11,10 @@ RUN apt-get update \
     && node scripts/runtime-binary.mjs node /opt/node26/bin \
     && /opt/node26/bin/node --version
 ENV PATH="/opt/node26/bin:${PATH}"
-RUN npm ci --ignore-scripts --omit=optional && sh scripts/audit-dependencies.sh
+# Rspack ships its platform-specific binary as an optional npm dependency.
+RUN npm ci --ignore-scripts && sh scripts/audit-dependencies.sh
 COPY config/blocklist-manifest.json config/
-COPY webpack.node.cjs ./
+COPY rspack.node.cjs ./
 RUN npm run build:node && sh scripts/prepare.sh --assets
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc

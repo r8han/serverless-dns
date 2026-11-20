@@ -63,19 +63,15 @@ registerHooks({
 });
 const { admitPrivate, handleRequest } = await import("../../src/core/doh.js");
 const { services } = await import("../../src/core/svc.js");
-const { BlocklistWrapper } = await import(
-  "../../src/plugins/rethinkdns/main.js"
-);
+const { BlocklistWrapper } =
+  await import("../../src/plugins/rethinkdns/main.js");
 const { UserOp } = await import("../../src/plugins/users/user-op.js");
-const { CommandControl } = await import(
-  "../../src/plugins/command-control/cc.js"
-);
-const { DNSCacheResponder, DNSResolver, DnsCache } = await import(
-  "../../src/plugins/dns-op/dns-op.js"
-);
-const { cacheKey, lifetime, replay, UpstreamAnswer } = await import(
-  "../../src/plugins/cache-util.js"
-);
+const { CommandControl } =
+  await import("../../src/plugins/command-control/cc.js");
+const { DNSCacheResponder, DNSResolver, DnsCache } =
+  await import("../../src/plugins/dns-op/dns-op.js");
+const { cacheKey, lifetime, replay, UpstreamAnswer } =
+  await import("../../src/plugins/cache-util.js");
 const binary = (b64) => Uint8Array.from(Buffer.from(b64, "base64")).buffer;
 const query = dns.mkQ(5, [{ name: "listed.example", type: "A" }]);
 const q = dns.decodeQuery(query);

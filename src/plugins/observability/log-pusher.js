@@ -116,8 +116,8 @@ export class LogPusher {
     const result = ctx.isBlocked
       ? "blocked"
       : ctx.responseDecodedDnsPacket?.answers?.length
-      ? "answered"
-      : "negative";
+        ? "answered"
+        : "negative";
     const tenant = auth.partition;
     const time = Date.now();
     const bindings = globalThis.wenv;

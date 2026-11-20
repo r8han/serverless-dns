@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import { validateSize } from "./dnsutil.js";
 async function exact(conn, bytes) {
-  for (let i = 0; i < bytes.length; ) {
+  for (let i = 0; i < bytes.length;) {
     const n = await conn.read(bytes.subarray(i));
     if (n == null) {
       if (!i) return false;
