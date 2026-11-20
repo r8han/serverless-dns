@@ -5,16 +5,22 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+import {
+  cancelScope,
+  checkAlive,
+  fetchSignal,
+  openResponse,
+  whileAlive,
+} from "../../commons/cancel.js";
+import { readBounded } from "../../commons/bounded.js";
 import * as bufutil from "../../commons/bufutil.js";
 import * as dnsutil from "../../commons/dnsutil.js";
 import * as envutil from "../../commons/envutil.js";
 import * as util from "../../commons/util.js";
 import { log } from "../../core/log.js";
-import * as system from "../../system.js";
 import * as cacheutil from "../cache-util.js";
 import * as pres from "../plugin-response.js";
 import * as rdnsutil from "../rdns-util.js";
-import { BlocklistFilter } from "../rethinkdns/filter.js";
 import { DnsBlocker } from "./blocker.js";
 
 export default class DNSResolver {
@@ -35,26 +41,17 @@ export default class DNSResolver {
     this.log = log.withTags("DnsResolver");
 
     this.measurements = [];
-    this.coalstats = { tot: 0, pub: 0, empty: 0, try: 0 };
+    this.pendingQueries = new Map(); // plain-DNS exchanges in flight on this transport
     this.profileResolve = envutil.profileDnsResolves();
     // only valid on nodejs
     this.forceDoh = envutil.forceDoh();
-    this.timeout = (envutil.workersTimeout() / 2) | 0;
+    this.timeout = Math.floor(dnsutil.requestTimeout() / 2);
 
-    // only valid on workers
-    // bg-bw-init results in higher io-wait, not lower
-    // p99 gb-sec (0.04 => 0.06); p99.9 gb-sec (0.09 => 0.14)
-    // also: from commit 35a557efe69e (14 Nov 2022) to 6b9a2e9f (25 Nov 2022)
-    // the cpu time has gone up for p50 ms (2.2 => 2.7); p75 (3.9 => 6.6);
-    // p99 (21.2 => 31.5); p99.9 (60 => 72.2); p50 gb-sec (.002 => .003)
-    // p75 (.004 => .007); p99 (.026 => .039); p99.9 (.069 => .126)
-    // it turned out that the trie-cache wasn't being used at all due to
-    // a missing version bump (npm update fixed it).
     this.bgBwInit = envutil.bgDownloadBlocklistWrapper();
     this.maxDoh = envutil.maxDohUrl();
 
     if (this.profileResolve) {
-      this.log.w("profiling", this.determineDohResolvers());
+      this.log.w("profiling enabled");
       this.log.w("doh?", this.forceDoh);
     } else {
       const cok = this.cache != null;
@@ -86,8 +83,8 @@ export default class DNSResolver {
     try {
       response.data = await this.resolveDns(ctx);
     } catch (e) {
-      response = pres.errResponse("dnsResolver", e);
-      this.log.e(ctx.rxid, "main", e.stack);
+      response = pres.errResponse("dnsResolver");
+      this.log.w(ctx.rxid, "resolution failed");
     }
 
     return response;
@@ -99,12 +96,6 @@ export default class DNSResolver {
 
     if (!util.emptyString(preferredDoh)) {
       return [preferredDoh];
-    }
-
-    // if blocklists aren't setup, return only primary because blocklists
-    // themselves need min 4 network-io solts of the 6 available on Workers
-    if (!this.bw.disabled() && !this.bw.isBlocklistFilterSetup()) {
-      return [envutil.primaryDohResolver()];
     }
 
     return envutil.dohResolvers();
@@ -144,6 +135,7 @@ export default class DNSResolver {
    * @param {pres.BlockstampInfo} ctx.userBlocklistInfo
    * @param {String} ctx.userDnsResolverUrl
    * @param {string} ctx.userBlockstamp
+   * @param {number} [ctx.deadline] - request deadline in epoch milliseconds
    * @param {pres.BStamp?} ctx.domainBlockstamp
    * @param {function(function):void} ctx.dispatcher
    * @returns {Promise<pres.RResp>}
@@ -153,7 +145,7 @@ export default class DNSResolver {
     const req = ctx.request;
     const blInfo = ctx.userBlocklistInfo;
     const rawpacket = ctx.requestBodyBuffer;
-    const decodedpacket = ctx.requestDecodedDnsPacket;
+    const decodedpacket = dnsutil.decodeQuery(rawpacket);
     const userDns = ctx.userDnsResolverUrl;
     const forceUserDns = this.forceDoh || !util.emptyString(userDns);
     const dispatcher = ctx.dispatcher;
@@ -162,145 +154,99 @@ export default class DNSResolver {
     // may be a obj { domainName: String -> blockstamps: Uint16Array }
     const stamps = ctx.domainBlockstamp;
 
+    if (ctx.deadline != null && Date.now() >= ctx.deadline) {
+      throw new Error("request deadline exceeded");
+    }
+    if (this.bw.disabled() && rdnsutil.hasBlockstamp(blInfo)) {
+      throw new Error("requested filtering unavailable");
+    }
     let blf = this.bw.getBlocklistFilter();
-    const isBlfDisabled = this.bw.disabled();
-    let isBlfSetup = rdnsutil.isBlocklistFilterSetup(blf);
-    const ts = this.bw.timestamp(util.yyyymm());
-
-    // if both blocklist-filter (blf) and stamps are not setup, question-block
-    // is a no-op, while we expect answer-block to catch the block regardless.
-    const q = this.makeRdnsResponse(rxid, rawpacket, blf, stamps);
-
-    this.blocker.blockQuestion(rxid, /* out*/ q, blInfo);
-    this.log.d(rxid, "q block?", q.isBlocked, "blf?", isBlfSetup, "ts?", ts);
-
+    const cold = !this.bw.disabled() && !rdnsutil.isBlocklistFilterSetup(blf);
+    const fromMax = cold && this.bgBwInit;
+    if (cold && !fromMax) {
+      // Do not send even the question upstream until its policy is known.
+      // A download can finish for other requests after this one times out.
+      const deadline = ctx.deadline ?? Date.now() + dnsutil.requestTimeout();
+      const waitMs = Math.min(deadline - Date.now(), envutil.downloadTimeout());
+      if (waitMs <= 0) throw new Error("blocklist deadline exceeded");
+      const init = this.bw.init(rxid, true);
+      dispatcher(init); // allow the filter download to outlive a slow request
+      await whileAlive(
+        util.timedOp((done) => {
+          init.then(
+            (v) => done(v),
+            (err) => done(null, err)
+          );
+        }, waitMs),
+        ctx.signal
+      );
+      checkAlive(ctx.signal);
+      blf = this.bw.getBlocklistFilter();
+      if (Date.now() >= deadline || !rdnsutil.isBlocklistFilterSetup(blf)) {
+        throw new Error("local blocklist filter unavailable");
+      }
+    }
+    const ts = this.bw.cacheTimestamp();
+    const q = this.makeRdnsResponse(
+      decodedpacket,
+      rawpacket,
+      blf,
+      cold ? null : stamps
+    );
+    const key = cacheutil.cacheKey(decodedpacket, ts, userDns);
+    this.blocker.blockQuestion(rxid, q, blInfo);
     if (q.isBlocked) {
-      this.primeCache(rxid, ts, q, dispatcher);
+      this.cache.putPolicy(key, q.stamps);
       return q;
     }
 
-    let resolveStart = 0;
-    let resolveEnd = 0;
-    if (this.profileResolve) {
-      resolveStart = Date.now();
-    }
-
-    let fromMax = false;
-    let promisedTasks = null;
-    if (!isBlfSetup && this.bgBwInit) {
-      const alt = this.ofMax(userBlockstamp);
-      fromMax = true;
-      this.log.d(rxid, "bg-bw-init; upstream to max", alt);
-      dispatcher(this.bw.init(rxid));
-      promisedTasks = await Promise.allSettled([
-        Promise.resolve(), // placeholder promise that never rejects
-        this.resolveDnsUpstream(
-          rxid,
-          ts,
-          req,
-          this.determineDohResolvers(alt, /* forceDoh */ true),
-          rawpacket,
-          decodedpacket
-        ),
-      ]);
+    const start = this.profileResolve ? Date.now() : 0;
+    let answer;
+    if (fromMax) {
+      // A failed install must not surface as an unhandled rejection: this
+      // request answered from the approved endpoint, and the next one retries.
+      dispatcher(this.bw.init(rxid).catch(() => {}));
+      // Only this operator-approved endpoint can apply the user's blockstamp.
+      // Do not race it against an unfiltered answer in the shared cache.
+      answer = await this.queryDoh(
+        this.ofMax(userBlockstamp),
+        req,
+        rawpacket,
+        decodedpacket,
+        ctx.signal
+      );
     } else {
-      // nested async calls (async fn calling another async fn)
-      // need to await differently depending on what's returned:
-      // case1:
-      // fulfiller = async () => { return "123"; }
-      // wrapper = async () => { return fulfiller(); }
-      // result = await wrapper() :: outputs "123"
-      // case2:
-      // arrayWrapper = async () => { return [fulfiller()]; }
-      // result1 = await arrayWrapper() :: outputs "Array[Promise{}]"
-      // result2 = await result1[0] :: outputs "123"
-      promisedTasks = await Promise.allSettled([
-        this.bw.init(rxid),
-        this.resolveDnsUpstream(
-          rxid,
-          ts,
-          req,
-          this.determineDohResolvers(userDns, forceUserDns),
-          rawpacket,
-          decodedpacket
-        ),
-      ]);
+      answer = await this.queryUpstream(
+        rxid,
+        ts,
+        req,
+        this.determineDohResolvers(userDns, forceUserDns),
+        rawpacket,
+        decodedpacket,
+        ctx.signal
+      );
     }
-
-    for (const task of promisedTasks) {
-      if (task.status === "rejected") {
-        throw new Error(`task rejected ${task.reason}`);
-      } // else: task.status === "fulfilled"
-    }
-
     if (this.profileResolve) {
-      resolveEnd = Date.now();
-      this.measurements.push(resolveEnd - resolveStart);
+      this.measurements.push(Date.now() - start);
       this.logMeasurementsPeriodically();
     }
 
-    // developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled#return_value
-    /** @type{Response} */
-    const res = promisedTasks[1].value;
-
-    if (fromMax) {
-      // blf would be eventually be init'd in the background
-      isBlfSetup = true;
-    } else if (!isBlfSetup && !isBlfDisabled) {
-      this.log.d(rxid, "blocklist-filter downloaded and setup");
-      blf = this.bw.getBlocklistFilter();
-      isBlfSetup = rdnsutil.isBlocklistFilterSetup(blf);
-    } else {
-      // override, as blocklists disabled
-      isBlfSetup = true;
-    }
-
-    if (!isBlfSetup) throw new Error(rxid + " no blocklist-filter");
-    if (!res) throw new Error(rxid + " no upstream result");
-
-    if (!res.ok) {
-      const txt = res.text && (await res.text());
-      this.log.w(rxid, "!OK", res.status, txt);
-      throw new Error(txt + " http err: " + res.status + " " + res.statusText);
-    }
-
-    const ans = await res.arrayBuffer();
-
-    let r;
-    try {
-      r = this.makeRdnsResponse(rxid, ans, blf, stamps);
-    } catch (e) {
-      this.log.w(rxid, "upstream returned malformed dns response:", e.message);
-      const pkt = dnsutil.servfail(decodedpacket.id, decodedpacket.questions);
-      r = pres.dnsResponse(dnsutil.decode(pkt), pkt, stamps);
-    }
-
-    // blockAnswer is a no-op if the ans is already quad0
-    // check outgoing cached dns-packet against blocklists
-    this.blocker.blockAnswer(rxid, /* out*/ r, blInfo);
-    const fromCache = cacheutil.hasCacheHeader(res.headers);
-    this.log.d(rxid, "a block?", r.isBlocked, "c?", fromCache, "max?", fromMax);
-
-    // if res was got from caches or if res was got from max doh (ie, blf
-    // wasn't used to retrieve stamps), then skip hydrating the cache
-    if (!fromCache && !fromMax) {
-      this.primeCache(rxid, ts, r, dispatcher);
-    }
+    // Question-only stamps may not cover CNAMEs in the upstream answer.
+    const r = this.makeRdnsResponse(answer.packet, answer.bytes, blf);
+    this.blocker.blockAnswer(rxid, r, blInfo);
+    checkAlive(ctx.signal);
+    if (!fromMax) this.cache.putAnswer(key, answer, r.stamps, dispatcher);
     return r;
   }
 
   /**
-   * @param {string} rxid
+   * @param {Object} dnsPacket
    * @param {ArrayBuffer} raw
-   * @param {BlocklistFilter} blf
+   * @param {import("../rethinkdns/filter.js").BlocklistFilter} blf
    * @param {pres.BStamp?} stamps
    * @returns {pres.RespData}
-   * @throws if raw is a malformed dns packet or not a dns packet.
    */
-  makeRdnsResponse(rxid, raw, blf, stamps = null) {
-    if (!raw) throw new Error(rxid + " mk-res no upstream result");
-
-    const dnsPacket = dnsutil.decode(raw); // may throw if malformed
+  makeRdnsResponse(dnsPacket, raw, blf, stamps = null) {
     // stamps are empty for domains that are not in any blocklist
     // but there's no way to know if that was indeed the case as
     // stamps are sent here by cache-resolver, which may or may not
@@ -312,197 +258,128 @@ export default class DNSResolver {
     return pres.dnsResponse(dnsPacket, raw, stamps);
   }
 
-  /**
-   * @param {string} rxid
-   * @param {string} ts
-   * @param {pres.RespData} r
-   * @param {function(function):void} dispatcher
-   * @returns {Promise<void>}
-   */
-  primeCache(rxid, ts, r, dispatcher) {
-    const blocked = r.isBlocked;
-    const k = cacheutil.makeHttpCacheKey(r.dnsPacket, ts);
-    if (!k) {
-      this.log.d(rxid, "primeCache: no key, url/query missing?", k, r.stamps);
-      return;
-    }
-
-    this.log.d(rxid, "primeCache: block?", blocked, "k", k.href);
-    const v = cacheutil.cacheValueOf(r);
-    this.cache.put(k, v, dispatcher);
-  }
-
   ofMax(blockstamp) {
     if (util.emptyString(this.maxDoh)) return "";
     if (util.emptyString(blockstamp)) return this.maxDoh;
     else return this.maxDoh + blockstamp;
   }
-}
 
-/**
- * @param {String} rxid
- * @param {String} ts
- * @param {Request} request
- * @param {String[]} resolverUrls
- * @param {ArrayBuffer} query
- * @param {any} packet
- * @returns {Promise<Response|Error>}
- */
-DNSResolver.prototype.resolveDnsUpstream = async function (
-  rxid,
-  ts,
-  request,
-  resolverUrls,
-  query,
-  packet
-) {
-  // if no doh upstreams set, resolve over plain-old dns
-  if (util.emptyArray(resolverUrls)) {
-    const eid = cacheutil.makeId(packet);
-    /** @type {ArrayBuffer[]?} */
-    let parcel = null;
-
+  // Return decoded answers alongside their wire bytes: validate before the
+  // race, without having to parse the winning DNS packet a second time.
+  async queryUpstream(
+    rxid,
+    ts,
+    request,
+    resolverUrls,
+    query,
+    packet,
+    signal = request.signal
+  ) {
+    checkAlive(signal);
+    if (util.emptyArray(resolverUrls)) {
+      return this.queryPlainDns(rxid, query, packet, signal);
+    }
+    const race = cancelScope([signal]);
     try {
-      const g = await system.when(eid, this.timeout);
-      this.coalstats.tot += 1;
-      if (!util.emptyArray(g) && g[0] != null) {
-        const sz = bufutil.len(g[0]);
-        this.log.d(rxid, "coalesced", eid, sz, this.coalstats);
-        if (sz > 0) return Promise.resolve(new Response(g[0]));
-      }
-      this.coalstats.empty += 1;
-      this.log.e(rxid, "empty coalesced", eid, this.coalstats);
-      return Promise.resolve(util.respond503());
-    } catch (reason) {
-      // happens on timeout or if new event, eid
-      this.coalstats.try += 1;
-      this.log.d(rxid, "not coalesced", eid, reason, this.coalstats);
+      return await Promise.any(
+        resolverUrls
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((url) => this.queryDoh(url, request, query, packet, race.signal))
+      );
+    } finally {
+      race.close();
     }
-
-    if (this.transport == null) {
-      this.log.e(rxid, "plain dns transport not set");
-      this.coalstats.pub += 1;
-      system.pub(eid, parcel);
-      return Promise.reject(new Error("plain dns transport not set"));
-    }
-
-    let promisedResponse = null;
-    try {
-      // do not let exceptions passthrough to the caller
-      const q = bufutil.bufferOf(query);
-
-      let ans = await this.transport.udpquery(rxid, q);
-      if (dnsutil.truncated(ans)) {
-        this.log.w(rxid, "ans truncated, retrying over tcp");
-        ans = await this.transport.tcpquery(rxid, q);
-      }
-
-      if (ans) {
-        const ab = bufutil.arrayBufferOf(ans);
-        parcel = [ab];
-        promisedResponse = Promise.resolve(new Response(ab));
-      } else {
-        promisedResponse = Promise.resolve(util.respond503());
-      }
-    } catch (e) {
-      this.log.e(rxid, "err when querying plain old dns", e.stack);
-      promisedResponse = Promise.reject(e);
-    }
-
-    this.coalstats.pub += 1;
-    system.pub(eid, parcel);
-    return promisedResponse;
   }
 
-  // Promise.any on promisedPromises[] only works if there are
-  // zero awaits in this function or any of its downstream calls.
-  // Otherwise, the first reject in promisedPromises[], before
-  // any statement in the call-stack awaits, would throw unhandled
-  // error, since the event loop would have 'ticked' and Promise.any
-  // on promisedPromises[] would still not have been executed, as it
-  // is the last statement of this function (which would have eaten up
-  // all rejects as long as there was one resolved promise).
-  const promisedPromises = [];
-  try {
-    // upstream to cache
-    this.log.d(rxid, "upstream cache");
-    promisedPromises.push(this.resolveDnsFromCache(rxid, ts, packet));
-
-    // upstream to resolvers
-    for (const rurl of resolverUrls) {
-      if (util.emptyString(rurl)) {
-        this.log.w(rxid, "missing resolver url", rurl, "among", resolverUrls);
-        continue;
-      }
-
-      const u = new URL(request.url);
-      const upstream = new URL(rurl);
-      u.hostname = upstream.hostname; // default cloudflare-dns.com
-      u.pathname = upstream.pathname; // override path, default /dns-query
-      u.port = upstream.port; // override port, default 443
-      u.protocol = upstream.protocol; // override proto, default https
-
-      let dnsreq = null;
-      // even for GET requests, plugin.js:getBodyBuffer converts contents of
-      // u.search into an arraybuffer that then needs to be reconverted back
+  async queryDoh(url, request, query, question, signal = request.signal) {
+    const upstream = new URL(url);
+    if (
+      upstream.protocol !== "https:" ||
+      upstream.username ||
+      upstream.password
+    ) {
+      throw new Error("HTTPS upstream required");
+    }
+    const scope = cancelScope([signal], this.timeout);
+    try {
+      const init = {
+        method: request.method,
+        redirect: "manual",
+        headers: util.dnsHeaders(),
+        ...fetchSignal(scope.signal),
+      };
       if (util.isGetRequest(request)) {
-        u.search = "?dns=" + bufutil.bytesToBase64Url(query);
-        dnsreq = new Request(u.href, {
-          method: "GET",
-          headers: util.dnsHeaders(),
-          signal: AbortSignal.timeout(this.timeout),
-        });
+        upstream.searchParams.set("dns", bufutil.bytesToBase64Url(query));
       } else if (util.isPostRequest(request)) {
-        dnsreq = new Request(u.href, {
-          method: "POST",
-          headers: util.concatHeaders(
-            util.contentLengthHeader(query),
-            util.dnsHeaders()
-          ),
-          body: query,
-          signal: AbortSignal.timeout(this.timeout),
-        });
+        init.body = query;
       } else {
         throw new Error("get/post only");
       }
-
-      this.log.d(rxid, "upstream doh2/fetch", u.href);
-      promisedPromises.push(fetch(dnsreq));
+      const res = await openResponse(
+        () => fetch(new Request(upstream.href, init)),
+        scope.signal
+      );
+      if (res.status !== 200) {
+        res.body?.cancel().catch(() => {});
+        throw new Error("upstream HTTP status: " + res.status);
+      }
+      return new cacheutil.UpstreamAnswer(
+        await readBounded(res, dnsutil.maxDNSPacketSize, scope.signal),
+        question
+      );
+    } finally {
+      scope.close();
     }
-  } catch (e) {
-    this.log.e(rxid, "err doh2/fetch upstream", e.stack);
-    promisedPromises.push(Promise.reject(e));
   }
 
-  // Promise.any returns any rejected promise if none resolved; node v15+
-  return Promise.any(promisedPromises);
-};
-
-/**
- * resolveDnsFromCache answers query requested by packet from local or remote cache.
- * @param {string} rxid
- * @param {string} ts
- * @param {any} packet
- * @returns {Promise<Response|Error>} with the answer as buffer of the dns packet or error
- */
-DNSResolver.prototype.resolveDnsFromCache = async function (rxid, ts, packet) {
-  const k = cacheutil.makeHttpCacheKey(packet, ts);
-  if (!k) throw new Error("resolver: no cache-key");
-
-  const cr = await this.cache.get(k);
-  const isAns = cr != null && dnsutil.isAnswer(cr.dnsPacket);
-  const hasAns = isAns && dnsutil.hasAnswers(cr.dnsPacket);
-  // if cr has answers, use probablistic expiry; otherwise prefer actual ttl
-  const fresh = isAns && cacheutil.isAnswerFresh(cr.metadata, hasAns ? 0 : 6);
-  this.log.d(rxid, "cache ans", k.href, "ans?", isAns, "fresh?", fresh);
-
-  if (!isAns || !fresh) {
-    return Promise.reject(new Error("resolver: cache miss"));
+  async queryPlainDns(rxid, query, packet, signal) {
+    const key = bufutil.bytesToBase64Url(bufutil.normalize8(query).subarray(2));
+    let flight = this.pendingQueries.get(key);
+    if (!flight) {
+      if (this.pendingQueries.size >= 256) throw new Error("resolver busy");
+      const scope = cancelScope([], this.timeout);
+      flight = { scope, users: 0 };
+      this.pendingQueries.set(key, flight);
+      flight.work = this.exchangePlainDns(rxid, query, scope.signal).finally(
+        () => {
+          if (this.pendingQueries.get(key) === flight) {
+            this.pendingQueries.delete(key);
+          }
+          scope.close();
+        }
+      );
+    }
+    flight.users++;
+    let bytes;
+    try {
+      bytes = (await whileAlive(flight.work, signal)).slice(0);
+    } finally {
+      if (--flight.users === 0) flight.scope.close();
+    }
+    new DataView(bytes).setUint16(0, packet.id);
+    return new cacheutil.UpstreamAnswer(bytes, packet);
   }
 
-  cacheutil.updatedAnswer(cr.dnsPacket, packet.id, cr.metadata.expiry);
-  const b = dnsutil.encode(cr.dnsPacket);
-  const r = new Response(b, { headers: cacheutil.cacheHeaders() });
-
-  return Promise.resolve(r);
-};
+  async exchangePlainDns(rxid, query, signal) {
+    if (!this.transport) throw new Error("plain dns transport not set");
+    const q = bufutil.bufferOf(new Uint8Array(query).slice().buffer);
+    crypto.getRandomValues(q.subarray(0, 2));
+    const question = dnsutil.decodeQuery(q);
+    let ans = await this.transport.udpquery(rxid, q, signal);
+    checkAlive(signal);
+    if (dnsutil.truncated(ans)) {
+      const partial = dnsutil.decode(ans);
+      if (
+        partial.id !== question.id ||
+        !cacheutil.sameQuestion(partial, question)
+      ) {
+        throw new Error("mismatched UDP question");
+      }
+      ans = await this.transport.tcpquery(rxid, q, signal);
+      checkAlive(signal);
+    }
+    const bytes = bufutil.arrayBufferOf(ans);
+    return new cacheutil.UpstreamAnswer(bytes, question).bytes;
+  }
+}

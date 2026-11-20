@@ -6,6 +6,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { selfTest } from "../plugins/users/auth-token.js";
 import * as dnsutil from "../commons/dnsutil.js";
 import * as util from "../commons/util.js";
 import { CommandControl } from "../plugins/command-control/cc.js";
@@ -56,6 +57,17 @@ async function systemReady(args) {
 
   log.i("svc", "systemReady");
 
+  try {
+    await selfTest();
+    services.userOp = new UserOp();
+  } catch {
+    log.e("invalid authentication configuration; resolver unavailable");
+    if (envManager.r() === "worker" || envManager.r() === "fastly") {
+      system.pub("go"); // handleRequest will reject while services.ready is false
+      return;
+    }
+    throw new Error("authentication startup check failed");
+  }
   const bw = new BlocklistWrapper();
   const cache = new DnsCache(dnsutil.cacheSize());
   const lp = new LogPusher();
@@ -63,7 +75,6 @@ async function systemReady(args) {
 
   services.blocklistWrapper = bw;
   services.logPusher = lp;
-  services.userOp = new UserOp();
   services.prefilter = new DNSPrefilter();
   services.dnsCacheHandler = new DNSCacheResponder(bw, cache);
   services.dnsResolver = new DNSResolver(bw, cache, dns53);

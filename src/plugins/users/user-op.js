@@ -23,6 +23,7 @@ const delegated = new Set(["ipv4only.arpa"]);
 
 export class UserOp {
   constructor() {
+    this.keys = token.credentials(envManager.get("ACCESS_KEYS"));
     this.userConfigCache = new UserCache(cacheSize);
     this.log = log.withTags("UserOp");
   }
@@ -35,15 +36,15 @@ export class UserOp {
     let res = pres.emptyResponse();
 
     try {
-      const out = await token.auth(ctx.rxid, ctx.request.url);
-      if (!out.ok) {
-        res = pres.errResponse("UserOp:Auth", new Error("auth failed"));
+      const out = await token.auth(ctx.request, this.keys);
+      if (!out.ok || (ctx.isDnsMsg && out.scope === "read")) {
+        res = pres.errResponse("UserOp:Auth");
       } else {
         res = this.loadUser(ctx);
       }
       res.data.userAuth = out;
     } catch (ex) {
-      res = pres.errResponse("UserOp", ex);
+      res = pres.errResponse("UserOp");
     }
 
     return res;
@@ -71,11 +72,9 @@ export class UserOp {
         }
       }
 
-      const blocklistFlag = rdnsutil.blockstampFromUrl(ctx.request.url);
+      const blocklistFlag = rdnsutil.blockstampFromUrl(ctx.request.url, true);
       const hasflag = !util.emptyString(blocklistFlag);
-      if (!hasflag) {
-        this.log.d(ctx.rxid, "empty blocklist-flag", ctx.request.url);
-      }
+
       // blocklistFlag may be invalid, ref rdnsutil.blockstampFromUrl
       let r = this.userConfigCache.get(blocklistFlag);
       let hasdata = rdnsutil.hasBlockstamp(r);
@@ -84,15 +83,8 @@ export class UserOp {
         r = rdnsutil.unstamp(blocklistFlag); // r is never null, may throw ex
         hasdata = rdnsutil.hasBlockstamp(r);
 
-        if (hasdata) {
-          this.log.d(ctx.rxid, "new cfg cache kv", blocklistFlag, r);
-          // TODO: blocklistFlag is not normalized, ie b32 used for dot isn't
-          // converted to its b64 form (which doh and rethinkdns modules use)
-          // example, b32: 1-AABABAA / equivalent b64: 1:AAIAgA==
-          this.userConfigCache.put(blocklistFlag, r);
-        }
-      } else {
-        this.log.d(ctx.rxid, "cfg cache hit?", hasdata, blocklistFlag, r);
+        if (!hasdata) throw new Error("invalid policy");
+        this.userConfigCache.put(blocklistFlag, r);
       }
 
       if (hasdata) {
@@ -101,9 +93,7 @@ export class UserOp {
         // TODO: override response.data.dnsResolverUrl
       }
     } catch (e) {
-      this.log.e(ctx.rxid, "loadUser", e);
-      // avoid erroring out on invalid blocklist info & flag
-      // response = pres.errResponse("UserOp:loadUser", e);
+      return pres.errResponse("UserOp:Policy");
     }
 
     return response;

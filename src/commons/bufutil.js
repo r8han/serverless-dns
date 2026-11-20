@@ -33,7 +33,7 @@ export function toB64(buf) {
   if (emptyBuf(buf)) return ZEROSTR;
   if (buf instanceof Buffer) return buf.toString("base64");
   const u8 = normalize8(buf);
-  return Buffer.of(u8).toString("base64");
+  return Buffer.from(u8).toString("base64");
 }
 
 /**
@@ -220,7 +220,7 @@ export function recycleBuffer(b) {
  * @returns {Buffer}
  */
 export function createBuffer(size) {
-  return Buffer.allocUnsafe(size);
+  return Buffer.alloc(size);
 }
 
 /**

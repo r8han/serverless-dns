@@ -11,44 +11,12 @@
 // stackoverflow.com/a/47332317
 import { kdfSvcSecretHex } from "../commons/envutil.js";
 import { log } from "../core/log.js";
-import * as bufutil from "./bufutil.js";
 import { emptyBuf, fromStr, hex2buf, normalize8 } from "./bufutil.js";
 import { emptyString } from "./util.js";
 
-export const tktsz = 48;
 export const hkdfalgkeysz = 32; // sha256
-// hex: 9f34ba3c3c9097fef97e97effbb4bda4b9afa17dbb9b02f091a25d119ac91c5f
-const fixedsalt = new Uint8Array([
-  159, 52, 186, 60, 60, 144, 151, 254, 249, 126, 151, 239, 251, 180, 189, 164,
-  185, 175, 161, 125, 187, 155, 2, 240, 145, 162, 93, 17, 154, 201, 28, 95,
-]);
-
 const encctx = fromStr("encryptcrossservice");
 const macctx = fromStr("authorizecrossservice");
-
-/**
- * Generate 48-byte ticket from seed and context.
- * @param {Uint8Array} seed
- * @param {string} ctx
- * @returns {Promise<Uint8Array>}
- */
-export async function tkt48(seed, ctx) {
-  if (!emptyBuf(seed) && !emptyString(ctx)) {
-    try {
-      const sk512 = await sha512(seed);
-      const info512 = await sha512(fromStr(ctx));
-      const dk512 = await gen(sk512, info512);
-      log.i("tkt48: new", bufutil.len(seed), bufutil.len(dk512), ctx);
-      return new Uint8Array(dk512.slice(0, tktsz));
-    } catch (ignore) {
-      log.e("tkt48: err", bufutil.len(seed), ctx, ignore);
-    }
-  }
-  log.i("tkt48: random");
-  const t = new Uint8Array(tktsz);
-  crypto.getRandomValues(t);
-  return t;
-}
 
 /**
  * Generate secure random bytes of size sz.
@@ -61,20 +29,6 @@ export function csprng(sz) {
   return b;
 }
 
-// salt for hkdf can be zero if secret is pseudorandom
-// but a fixed salt is needed for high-entropy
-// but non uniform keys like outputs of DHKE
-async function gen(secret, info, salt = fixedsalt) {
-  const key = await hkdfhmac(secret, info, salt);
-  return crypto.subtle.exportKey("raw", key);
-}
-
-// with hkdf, salt is optional and public, but if used,
-// for a given secret (Z) it needn't be unique per use,
-// but it *must* be random:
-// cendyne.dev/posts/2023-01-30-how-to-use-hkdf.html
-// info adds entropy to extracted keys, and must be unique:
-// see: soatok.blog/2021/11/17/understanding-hkdf
 export async function hkdfhmac(skmac, usectx, salt = new Uint8Array(0)) {
   const dk = await hkdf(skmac);
   return await crypto.subtle.deriveKey(
@@ -126,7 +80,7 @@ export async function hmackey(sk) {
   return crypto.subtle.importKey(
     "raw",
     sk,
-    hmac256opts(),
+    { name: "HMAC", hash: "SHA-256" },
     false, // export = false
     ["sign", "verify"]
   );
@@ -245,8 +199,9 @@ export async function decryptAesGcm(aeskey, iv, taggedciphertext, aad) {
  * @returns {Promise<Uint8Array>} - The HMAC signature
  * @throws {Error} - If the key is not valid or signing fails
  */
-export function hmacsign(ck, m) {
-  const ab = crypto.subtle.sign("HMAC", ck, m);
+export async function hmacsign(ck, m) {
+  const ab = await crypto.subtle.sign("HMAC", ck, m);
+  if (ab.byteLength !== 32) throw new Error("invalid HMAC length");
   return normalize8(ab);
 }
 
@@ -272,7 +227,7 @@ export async function svckeys() {
   }
 
   const skhex = kdfSvcSecretHex();
-  if (emptyString(skhex)) {
+  if (!/^(?:[a-fA-F0-9]{2}){32,64}$/.test(skhex || "")) {
     log.e("key: KDF_SVC missing");
     return nokeys;
   }
@@ -293,8 +248,6 @@ export async function svckeys() {
     // info must always of a fixed size for ALL KDF calls
     const info512enc = await sha512(encctx);
     const info512mac = await sha512(macctx);
-    // exportable: crypto.subtle.exportKey("raw", key);
-    // log.d("key fingerprint", bufutil.hex(await sha512(bufutil.concat(sk, info512)));
     const aeskey = await hkdfaes(sk256, info512enc);
     const mackey = await hkdfhmac(sk256, info512mac);
 

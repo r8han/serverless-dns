@@ -8,7 +8,6 @@
 
 import * as bufutil from "../commons/bufutil.js";
 import * as dnsutil from "../commons/dnsutil.js";
-import * as envutil from "../commons/envutil.js";
 import * as util from "../commons/util.js";
 import { log } from "./log.js";
 
@@ -21,13 +20,7 @@ export default class IOState {
     /** @type {Response?} */
     this.httpResponse = null;
     /** @type {boolean} */
-    this.isProd = envutil.isProd();
-    /** @type {boolean} */
     this.isException = false;
-    /** @type {string} */
-    this.exceptionStack = null;
-    /** @type {string} */
-    this.exceptionFrom = "";
     /** @type {boolean} */
     this.isDnsBlock = false;
     /** @type {boolean} */
@@ -55,13 +48,12 @@ export default class IOState {
   gatewayAnswersOnly(ip4, ip6) {
     if (util.emptyString(ip4) || util.emptyString(ip6)) {
       this.alwaysGatewayAnswer = false;
-      this.log.w("none of the gw ans can be empty:", ip4, ip6);
+      this.log.w("gateway override requires both address families");
       return;
     }
     this.alwaysGatewayAnswer = true;
     this.gwip4 = ip4;
     this.gwip6 = ip6;
-    this.log.d("gateway ips set to", ip4, ip6);
   }
 
   emptyDecodedDnsPacket() {
@@ -82,55 +74,12 @@ export default class IOState {
     this.stopProcessing = true;
     this.isException = true;
 
-    if (util.emptyObj(res)) {
-      this.exceptionStack = "no-res";
-      this.exceptionFrom = "no-res";
-    } else {
-      this.exceptionStack = res.exceptionStack || "no-stack";
-      this.exceptionFrom = res.exceptionFrom || "no-origin";
-    }
-
-    try {
-      const qid = this.decodedDnsPacket.id; // may be null
-      const questions = this.decodedDnsPacket.questions; // may be null
-      const servfail = dnsutil.servfail(qid, questions); // may be empty
-      const hasServfail = !bufutil.emptyBuf(servfail);
-      const ex = {
-        exceptionFrom: this.exceptionFrom,
-        exceptionStack: this.exceptionStack,
-      };
-
-      if (hasServfail) {
-        // TODO: try-catch as decode may throw?
-        this.decodedDnsPacket = dnsutil.decode(servfail);
-      }
-
-      this.logDnsPkt();
-      this.httpResponse = new Response(servfail, {
-        headers: util.concatHeaders(
-          this.headers(servfail),
-          this.debugHeaders(JSON.stringify(ex))
-        ),
-        status: hasServfail ? 200 : 408, // rfc8484 section-4.2.1
-      });
-    } catch (e) {
-      const pktjson = JSON.stringify(this.decodedDnsPacket || {});
-      this.log.e("dnsExceptionResponse", pktjson, e.stack);
-      if (
-        this.exceptionStack === "no-res" ||
-        this.exceptionStack === "no-stack"
-      ) {
-        this.exceptionStack = e.stack;
-        this.exceptionFrom = "IOState:errorResponse";
-      }
-      this.httpResponse = new Response(null, {
-        headers: util.concatHeaders(
-          this.headers(),
-          this.debugHeaders(JSON.stringify(this.exceptionStack))
-        ),
-        status: 503,
-      });
-    }
+    const q = this.decodedDnsPacket;
+    const bytes = dnsutil.servfail(q.id, q.questions);
+    this.httpResponse = new Response(bytes, {
+      headers: this.headers(bytes),
+      status: bytes.byteLength ? 200 : 503,
+    });
   }
 
   hResponse(r) {
@@ -145,7 +94,7 @@ export default class IOState {
 
   /**
    * @param {ArrayBuffer} arrayBuffer - responseBodyBuffer
-   * @returns Web API Response
+   * @returns {ArrayBuffer|undefined} Bytes actually served, including gateway rewrites.
    */
   dnsResponse(arrayBuffer, dnsPacket = null, blockflag = null) {
     if (bufutil.emptyBuf(arrayBuffer)) {
@@ -166,22 +115,10 @@ export default class IOState {
       this.decodedDnsPacket = dnsPacket || dnsutil.decode(arrayBuffer);
     }
 
-    this.logDnsPkt();
     this.httpResponse = new Response(arrayBuffer, {
       headers: this.headers(arrayBuffer),
     });
-  }
-
-  logDnsPkt() {
-    if (this.isProd) return;
-    this.log.d(
-      "domains",
-      dnsutil.extractDomains(this.decodedDnsPacket),
-      dnsutil.getQueryType(this.decodedDnsPacket) || "",
-      "data",
-      dnsutil.getInterestingAnswerData(this.decodedDnsPacket),
-      dnsutil.ttl(this.decodedDnsPacket)
-    );
+    return arrayBuffer;
   }
 
   dnsBlockResponse(blockflag) {
@@ -197,15 +134,10 @@ export default class IOState {
         headers: this.headers(b),
       });
     } catch (e) {
-      this.log.e("dnsBlock", JSON.stringify(this.decodedDnsPacket), e.stack);
+      this.log.e("dnsBlock", "encoding failed");
       this.isException = true;
-      this.exceptionStack = e.stack;
-      this.exceptionFrom = "IOState:dnsBlockResponse";
       this.httpResponse = new Response(null, {
-        headers: util.concatHeaders(
-          this.headers(),
-          this.debugHeaders(JSON.stringify(this.exceptionStack))
-        ),
+        headers: this.headers(),
         status: 503,
       });
     }
@@ -223,15 +155,10 @@ export default class IOState {
         headers: this.headers(b),
       });
     } catch (e) {
-      this.log.e("nxdomain", JSON.stringify(this.decodedDnsPacket), e.stack);
+      this.log.e("nxdomain", "encoding failed");
       this.isException = true;
-      this.exceptionStack = e.stack;
-      this.exceptionFrom = "IOState:dnsNxDomainResponse";
       this.httpResponse = new Response(null, {
-        headers: util.concatHeaders(
-          this.headers(),
-          this.debugHeaders(JSON.stringify(this.exceptionStack))
-        ),
+        headers: this.headers(),
         status: 503,
       });
     }
@@ -250,43 +177,24 @@ export default class IOState {
     return util.concatHeaders(
       util.dnsHeaders(),
       util.contentLengthHeader(b),
-      this.cacheHeaders(),
+      { "cache-control": "private, no-store" },
       xNileRegion,
       xNileFlags,
       xNileFlagsOk
     );
   }
 
-  debugHeaders(json) {
-    if (this.isProd) return null;
-    if (!json) return null;
-
-    return {
-      "x-nile-add": json,
-    };
-  }
-
-  setCorsHeadersIfNeeded() {
-    // CORS headers are only allowed when response OK
-    // fetch.spec.whatwg.org/#cors-preflight-fetch (Step 7)
-    if (util.emptyObj(this.httpResponse) || !this.httpResponse.ok) return;
-
-    for (const [k, v] of Object.entries(util.corsHeaders())) {
-      this.httpResponse.headers.set(k, v);
-    }
-  }
-
-  // set cache from ttl in decoded-dns-packet
-  cacheHeaders() {
-    const ttl = dnsutil.ttl(this.decodedDnsPacket);
-    if (ttl <= 0) return null;
-
-    return {
-      "cache-control": "public, max-age=" + ttl,
-    };
-  }
-
   assignBlockResponse() {
+    if (!dnsutil.canSinkhole(this.decodedDnsPacket.questions[0])) {
+      this.decodedDnsPacket.type = "response";
+      this.decodedDnsPacket.flags = 0x185; // REFUSED for non-address queries
+      this.decodedDnsPacket.rcode = "REFUSED";
+      this.decodedDnsPacket.answers =
+        this.decodedDnsPacket.authorities =
+        this.decodedDnsPacket.additionals =
+          [];
+      return;
+    }
     let done = this.initFlagsAndAnswers();
     done = done && this.addData();
     done = done && this.wipeAuthorities();
@@ -295,7 +203,12 @@ export default class IOState {
 
   assignGatewayResponseIfNeeded() {
     let done = false;
-    if (!this.alwaysGatewayAnswer) return done;
+    if (
+      !this.alwaysGatewayAnswer ||
+      !dnsutil.canSinkhole(this.decodedDnsPacket.questions[0])
+    ) {
+      return done;
+    }
 
     done = this.initFlagsAndAnswers(60);
     done = done && this.addData(this.gwip4, this.gwip6);
@@ -312,6 +225,7 @@ export default class IOState {
       return false;
     }
 
+    this.decodedDnsPacket.additionals = [];
     this.decodedDnsPacket.type = "response";
     this.decodedDnsPacket.rcode = "NXDOMAIN";
     // TODO: what is flag(387) 0b_0_000_0000_1100_00011?
@@ -343,6 +257,7 @@ export default class IOState {
       this.log.e("decoded dns-packet missing question");
       return false;
     }
+    this.decodedDnsPacket.additionals = [];
     this.decodedDnsPacket.type = "response";
     this.decodedDnsPacket.rcode = "NOERROR";
     // TODO: what is flag(384) 0b0_0000_0000_1100_0000?
@@ -362,7 +277,7 @@ export default class IOState {
 
   addData(ip4 = "0.0.0.0", ip6 = "::") {
     if (util.emptyString(ip4) && util.emptyString(ip6)) {
-      this.log.w("either ip4/ip6 to assign ans data", ip4, ip6);
+      this.log.w("missing address for synthetic answer");
       return false;
     }
     // TODO: move record-type checks (A/AAAA/SVCB) to dnsutil

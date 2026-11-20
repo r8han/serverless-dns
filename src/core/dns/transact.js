@@ -67,6 +67,7 @@ export class TcpTx {
       this.onError(rxid, err);
     };
 
+    const deadline = setTimeout(onTimeout, timeout);
     try {
       const ans = this.promisedRead();
 
@@ -76,10 +77,16 @@ export class TcpTx {
       this.sock.on("close", onClose);
       this.sock.on("data", onData);
 
-      this.write(rxid, query);
-
+      // A synchronous write error must settle the pending read as well as
+      // release its deadline and event listeners.
+      try {
+        this.write(rxid, query);
+      } catch {
+        this.no("write failed");
+      }
       return await ans;
     } finally {
+      clearTimeout(deadline);
       this.sock.setTimeout(0);
       this.sock.removeListener("data", onData);
       this.sock.removeListener("timeout", onTimeout);
@@ -111,7 +118,7 @@ export class TcpTx {
     if (rem > 0) {
       const seek = Math.min(rem, cl);
       const read = chunk.slice(0, seek);
-      sb.qlenBuf.fill(read, sb.qlenBufOffset);
+      sb.qlenBuf.set(read, sb.qlenBufOffset);
       sb.qlenBufOffset += seek;
     }
 
@@ -138,7 +145,11 @@ export class TcpTx {
       sb.qBufOffset = bufutil.recycleBuffer(sb.qBuf);
     }
 
-    sb.qBuf.fill(data, sb.qBufOffset);
+    if (size > qlen - sb.qBufOffset) {
+      this.no("size-mismatch");
+      return;
+    }
+    sb.qBuf.set(data, sb.qBufOffset);
     sb.qBufOffset += size;
 
     // exactly qlen bytes read, the complete answer
@@ -158,12 +169,12 @@ export class TcpTx {
 
   onClose(rxid, err) {
     if (this.done) return; // no-op
-    return err ? this.no(err.message) : this.no("close");
+    return this.no("close");
   }
 
   onError(rxid, err) {
     if (this.done) return; // no-op
-    this.log.e(rxid, "udp err", err.message);
+    this.log.e(rxid, "TCP I/O error");
     this.no(err.message);
   }
 
@@ -294,8 +305,13 @@ export class UdpTx {
       this.sock.on("close", onClose);
       this.sock.on("message", onMessage);
 
-      this.write(rxid, query);
-
+      // A synchronous write error must settle the pending read as well as
+      // release its deadline and event listeners.
+      try {
+        this.write(rxid, query);
+      } catch {
+        this.no("write failed");
+      }
       return await ans;
     } finally {
       this.sock.removeListener("message", onMessage);
@@ -323,7 +339,7 @@ export class UdpTx {
    */
   onMessage(rxid, b, addrinfo) {
     if (this.done) return; // discard
-    this.log.d(rxid, "udp read", bufutil.len(b));
+    if (!dnsutil.validResponseSize(b)) return this.no("invalid DNS reply size");
     this.yes(b);
   }
 

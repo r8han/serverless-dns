@@ -38,7 +38,7 @@ function readChar(chr) {
   return idx;
 }
 
-function base32(arrbuf, padding) {
+export function base32(arrbuf, padding) {
   const view = toDataView(arrbuf);
   if (!view) throw new Error("cannot create data-view from given input");
 

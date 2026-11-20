@@ -1,21 +1,22 @@
 {
-  "compilerOptions": {
-    "allowJs": true
-  },
   "importMap": "import_map.json",
-  "nodeModulesDir": "auto",
+  "nodeModulesDir": "manual",
   "lock": false,
   "lint": {
     "files": {
-      "exclude": ["**/**"]
+      "exclude": [
+        "**/**"
+      ]
     }
   },
   "fmt": {
     "files": {
-      "exclude": ["**/**"]
+      "exclude": [
+        "**/**"
+      ]
     }
   },
   "tasks": {
-    "prepare": "./src/build/pre.sh"
+    "prepare": "sh scripts/prepare.sh"
   }
 }

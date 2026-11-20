@@ -1,289 +1,121 @@
-/*
- * Copyright (c) 2021 RethinkDNS and its authors.
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- */
-import * as dnsutil from "../commons/dnsutil.js";
-import * as envutil from "../commons/envutil.js";
-import * as util from "../commons/util.js";
-import * as pres from "./plugin-response.js";
+// SPDX-License-Identifier: MPL-2.0
+import * as dns from "../commons/dnsutil.js";
+import * as env from "../commons/envutil.js";
 
-const minTtlSec = 30; // 30s
-const maxTtlSec = 180; // 3m
-const expiresImmediately = 0; // 0s
-const someVeryHighTtl = 1 << 30; // 2^30s
-const cheader = "x-rdnscache-metadata";
-const _cacheurl = "https://caches.rethinkdns.com/";
-
-const _cacheHeaderKey = "x-rdns-cache";
-const _cacheHeaderHitValue = "hit";
-const _cacheHeaders = { [_cacheHeaderKey]: _cacheHeaderHitValue };
-
-function determineCacheExpiry(packet) {
-  // TODO: do not cache :: / 0.0.0.0 upstream answers?
-  // expiresImmediately => packet is not an ans but a question
-  if (!dnsutil.isAnswer(packet)) return expiresImmediately;
-
-  let ttl = someVeryHighTtl;
-
-  // TODO: nxdomain ttls are in the authority section
-  // TODO: OPT answers need not set a ttl field
-  // set min(ttl) among all answers, but at least minTtlSec
-  for (const a of packet.answers) ttl = Math.min(a.ttl || minTtlSec, ttl);
-
-  // if no answers, set min-ttl
-  if (ttl === someVeryHighTtl) ttl = minTtlSec;
-
-  // see also: isAnswerFresh
-  ttl += envutil.cacheTtl();
-  const expiry = Date.now() + ttl * 1000;
-
-  return expiry; // in millis
+export function sameQuestion(answer, query) {
+  const a = answer.questions[0];
+  const q = query.questions[0];
+  return (
+    answer.type === "response" &&
+    query.type === "query" &&
+    answer.opcode === query.opcode &&
+    a.type === q.type &&
+    a.class === q.class &&
+    dns.normalizeName(a.name) === dns.normalizeName(q.name)
+  );
 }
 
-/**
- * @param {any} dnsPacket
- * @param {pres.BStamp} stamps
- * @returns {DnsCacheMetadata}
- */
-function makeCacheMetadata(dnsPacket, stamps) {
-  // {
-  //   "expiry": 1642874536022,
-  //   "stamps": {
-  //     "amazonaws.com": [128,2],
-  //     "amazon.com": [16384,1024],
-  //     "rewrite.amazon.com": [944,32768,8,16384,16,16]
-  //   }
-  // }
-  return new DnsCacheMetadata(determineCacheExpiry(dnsPacket), stamps);
-}
-
-export class DnsCacheMetadata {
-  constructor(expiry, stamps) {
-    /** @type {number} */
-    this.expiry = expiry;
-    /** @type {pres.BStamp} */
-    this.stamps = stamps;
+// The sole answer-cache admission type. Neither a policy hit nor a synthesized
+// response travels this path. Validate the actual bytes, not a caller's object.
+export class UpstreamAnswer {
+  constructor(bytes, query) {
+    const packet = dns.decode(bytes);
+    if (
+      packet.id !== query.id ||
+      !sameQuestion(packet, query) ||
+      packet.flag_tc ||
+      !["NOERROR", "NXDOMAIN"].includes(packet.rcode)
+    ) {
+      throw new Error("unusable upstream DNS response");
+    }
+    this.bytes = bytes;
+    this.packet = packet;
   }
 }
 
-export class DnsCacheData {
-  constructor(packet, raw, metadata) {
-    /** @type {any} */
-    this.dnsPacket = packet; // may be null
-    /** @type {ArrayBuffer} */
-    this.dnsBuffer = raw;
-    /** @type {DnsCacheMetadata} */
-    this.metadata = metadata;
-  }
-}
-
-/**
- * @param {any} packet
- * @param {ArrayBuffer?} raw
- * @param {DnsCacheMetadata} metadata
- * @returns {DnsCacheData}
- */
-export function makeCacheValue(packet, raw, metadata) {
-  // null value allowed for packet / raw
-  return new DnsCacheData(packet, raw, metadata);
-}
-
-/**
- * @param {pres.RespData} rdnsResponse
- * @returns {DnsCacheData}
- */
-export function cacheValueOf(rdnsResponse) {
-  const stamps = rdnsResponse.stamps;
-  // do not cache OPT records
-  // github.com/bluejekyll/trust-dns/blob/a614257fb0/crates/proto/src/rr/rdata/opt.rs#L46-L52
-  const [packet, modified] = dnsutil.dropOPT(rdnsResponse.dnsPacket);
-  const raw = modified ? dnsutil.encode(packet) : rdnsResponse.dnsBuffer;
-
-  const metadata = makeCacheMetadata(packet, stamps);
-  return makeCacheValue(packet, raw, metadata);
-}
-
-function updateTtl(packet, end) {
-  const now = Date.now();
-  const actualttl = Math.floor((end - now) / 1000) - envutil.cacheTtl();
-  // jitter between min/max to prevent uniform expiry across clients
-  const outttl =
-    actualttl < minTtlSec ? util.rand(minTtlSec, maxTtlSec) : actualttl;
-  for (const a of packet.answers) {
-    if (!dnsutil.optAnswer(a)) a.ttl = outttl;
-  }
-}
-
-export function makeId(packet) {
-  // multiple questions are kind of an undefined behaviour
-  // stackoverflow.com/a/55093896
-  if (!dnsutil.hasSingleQuestion(packet)) return null;
-  const q = packet.questions[0];
-  const addn = dnsutil.hasDnssecOk(packet) ? ":dnssec" : "";
-  return dnsutil.normalizeName(q.name) + ":" + q.type + addn;
-}
-
-/**
- * @param {DnsCacheData} data
- * @returns {DnsCacheData}
- */
-export function makeLocalCacheValue(data) {
-  const b = data.dnsBuffer;
-  const metadata = data.metadata;
-  // ensure dnsPacket is null
-  return new DnsCacheData(null, b, metadata);
-}
-
-/**
- * @param {DnsCacheData} data
- * @returns {Response}
- */
-export function makeHttpCacheValue(data) {
-  const b = data.dnsBuffer;
-  const metadata = data.metadata;
-  const headers = {
-    headers: util.concatHeaders(
-      {
-        [cheader]: embedMetadata(metadata),
-        // ref: developers.cloudflare.com/workers/runtime-apis/cache#headers
-        "Cache-Control": /* 1w*/ "max-age=604800",
-      },
-      util.contentLengthHeader(b)
-    ),
-    // if using the fetch web api, "cf" directive needs to be set, instead
-    // ref: developers.cloudflare.com/workers/examples/cache-using-fetch
-    // cf: { cacheTtl: /*1w*/ 604800 },
-  };
-  // http-cache stores Response objs:
-  return new Response(b, headers);
-}
-
-/**
- * @param {any} packet
- * @param {ts} string
- * @returns {URL}
- */
-export function makeHttpCacheKey(packet, ts) {
-  const id = makeId(packet); // ex: domain.tld:A:dnssec
-  if (util.emptyString(id)) return null;
-  if (util.emptyString(ts)) ts = util.yyyymm();
-
-  return new URL(_cacheurl + ts + "/" + id);
-}
-
-/**
- * @param {Response} cres
- * @returns {DnsCacheMetadata}
- */
-export function extractMetadata(cres) {
-  const j = JSON.parse(cres.headers.get(cheader));
-  return new DnsCacheMetadata(j.expiry, j.stamps);
-}
-
-/**
- * @param {DnsCacheMetadata} m
- * @returns {string}
- */
-function embedMetadata(m) {
-  return JSON.stringify(m);
-}
-
-export function cacheHeaders() {
-  return _cacheHeaders;
-}
-
-export function hasCacheHeader(h) {
-  if (!h) return false;
-  return h.get(_cacheHeaderKey) === _cacheHeaderHitValue;
-}
-
-function updateQueryId(decodedDnsPacket, queryId) {
-  if (queryId === decodedDnsPacket.id) return false; // no change
-  decodedDnsPacket.id = queryId;
-  return true;
-}
-
-/**
- * @param {DnsCacheData} v
- * @returns {boolean}
- */
-export function isValueValid(v) {
-  if (util.emptyObj(v)) return false;
-
-  return hasMetadata(v.metadata);
-}
-
-/**
- * @param {DnsCacheMetadata} m
- * @returns {boolean}
- */
-export function hasMetadata(m) {
-  return !util.emptyObj(m);
-}
-
-/**
- * @param {DnsCacheData} v
- * @returns {boolean}
- */
-export function hasAnswer(v) {
-  if (!hasMetadata(v.metadata)) return false;
-  return isAnswerFresh(v.metadata, /* no roll*/ 6);
-}
-
-/**
- * @param {DnsCacheMetadata} m
- * @param {number} n
- * @returns {boolean}
- */
-export function isAnswerFresh(m, n = 0) {
-  // when expiry is 0, c.dnsPacket is a question and not an ans
-  // ref: determineCacheExpiry
-  const now = Date.now();
-  const ttl = envutil.cacheTtl() * 1000;
-  const r = n || util.rolldice(6);
-  if (r % 6 === 0) {
-    // 1 in 6 (~15% of the time), fresh if answer-ttl hasn't expired
-    return m.expiry > 0 && now <= m.expiry - ttl;
-  } else {
-    // 5 in 6, fresh if cache-ttl hasn't expired, regardless of answer-ttl
-    return m.expiry > 0 && now <= m.expiry;
-  }
-}
-
-export function updatedAnswer(dnsPacket, qid, expiry) {
-  updateQueryId(dnsPacket, qid);
-  updateTtl(dnsPacket, expiry);
-  trimAQuadAAnswer(dnsPacket);
-  return dnsPacket;
-}
-
-function trimAQuadAAnswer(decodedDnsPacket) {
-  // retain only the first answer, drop the rest
+export function cacheKey(packet, revision, preferred = "") {
   if (
-    !dnsutil.hasSingleQuestion(decodedDnsPacket) ||
-    !dnsutil.isQueryAQuadA(decodedDnsPacket) ||
-    !dnsutil.hasAnswers(decodedDnsPacket)
+    !revision ||
+    packet.type !== "query" ||
+    packet.additionals.some((a) => a.options?.length)
   ) {
-    return;
+    return null;
   }
+  const q = packet.questions[0];
+  const view = [
+    env.forceDoh(),
+    env.region(),
+    preferred || "",
+    ...env.dohResolvers(),
+  ];
+  const fields = [
+    revision,
+    env.blockSubdomains(),
+    ...view,
+    q.name,
+    q.type,
+    q.class,
+    packet.opcode,
+    packet.flags,
+    packet.additionals[0]?.udpPayloadSize,
+    dns.hasDnssecOk(packet),
+  ];
+  return new URL(
+    "https://caches.rethinkdns.com/verified-v2/" +
+      encodeURIComponent(JSON.stringify(fields))
+  );
+}
 
-  let dotrim = false;
-  const trimmed = new Array(0);
-  for (const a of decodedDnsPacket.answers) {
-    if (dnsutil.isAnswerCname(a)) {
-      trimmed.push(a);
-    }
-    if (dnsutil.isAnswerA(a) || dnsutil.isAnswerAAAA(a)) {
-      trimmed.push(a);
-      dotrim = true;
-      break;
-    }
+function records(p) {
+  return [...p.answers, ...p.authorities, ...p.additionals].filter(
+    (r) => r.type !== "OPT"
+  );
+}
+
+function negative(p) {
+  return (
+    p.rcode === "NXDOMAIN" ||
+    !p.answers.length ||
+    (p.authorities.some((r) => r.type === "SOA") &&
+      !p.answers.some((r) => r.type === p.questions[0].type))
+  );
+}
+
+export function lifetime(p) {
+  if (
+    p.flag_tc ||
+    !["NOERROR", "NXDOMAIN"].includes(p.rcode) ||
+    p.additionals.some((a) => a.options?.length)
+  ) {
+    return 0;
   }
-  if (dotrim) {
-    decodedDnsPacket.answers = trimmed;
-  } // else: nothing to trim, return as-is
-  return;
+  const rr = records(p);
+  if (!rr.length || rr.some((r) => r.ttl > 0x7fffffff)) return 0;
+  let ttl = Math.min(604800, ...rr.map((r) => r.ttl));
+  if (negative(p)) {
+    const soa = p.authorities.find((r) => r.type === "SOA");
+    ttl = Math.min(ttl, soa?.data.minimum ?? 0);
+  }
+  return ttl;
+}
+
+export function replay(entry, query) {
+  const bytes = entry.bytes.slice(0);
+  const packet = dns.decode(bytes);
+  if (!sameQuestion(packet, query) || !Number.isSafeInteger(entry.time)) {
+    return null;
+  }
+  const age = Math.floor((Date.now() - entry.time) / 1000);
+  const live = lifetime(packet);
+  if (age < 0 || age >= live) return null;
+  const wire = new DataView(bytes);
+  wire.setUint16(0, (packet.id = query.id));
+  for (const r of records(packet)) {
+    // RFC 2308: negative SOA TTL is also bounded by MINIMUM.
+    if (r.type === "SOA" && negative(packet)) {
+      r.ttl = Math.min(r.ttl, r.data.minimum);
+    }
+    wire.setUint32(r.ttlOffset, (r.ttl -= age));
+  }
+  return { packet, bytes, stamps: entry.stamps };
 }

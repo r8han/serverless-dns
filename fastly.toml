@@ -18,11 +18,11 @@ service_id = ""
       format = "inline-toml"
 
       [local_server.dictionaries.env.contents]
-        env = "development"
+        FASTLY_ENV = "development"
         CLOUD_PLATFORM = "fastly"
 
 [scripts]
-  build = "npm run build:fastly"
+  build = "npm run build:fastly && mkdir -p bin && cp dist/fastly.wasm bin/main.wasm"
 
 [setup]
 
@@ -32,7 +32,7 @@ service_id = ""
 
       [setup.dictionaries.env.items]
 
-        [setup.dictionaries.env.items.env]
+        [setup.dictionaries.env.items.FASTLY_ENV]
           value = "production"
         [setup.dictionaries.env.items.CLOUD_PLATFORM]
           value = "fastly"

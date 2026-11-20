@@ -5,6 +5,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
+import { ConfigStore } from "fastly:config-store";
 import { allowDynamicBackends } from "fastly:experimental";
 import * as system from "../../system.js";
 import EnvManager from "../env.js";
@@ -17,18 +18,23 @@ system.when("steady").then(up);
 // on Fastly, setup is called for every new request,
 // since server-fastly.js fires "prepare" on every request
 function prep() {
-  allowDynamicBackends(true);
+  allowDynamicBackends({
+    connectTimeout: 3000,
+    firstByteTimeout: 5000,
+    betweenBytesTimeout: 3000,
+  });
 
   // This is used within `EnvManager`
   if (!globalThis.fastlyEnv) {
-    globalThis.fastlyEnv = new Dictionary("env");
+    // Missing bindings must not silently select the public-DNS default.
+    globalThis.fastlyEnv = new ConfigStore("env");
   }
 
   if (!globalThis.envManager) {
     globalThis.envManager = new EnvManager();
   }
 
-  const isProd = envManager.get("env") === "production";
+  const isProd = envManager.get("FASTLY_ENV") === "production";
 
   if (!hasLogger()) {
     setLogger(

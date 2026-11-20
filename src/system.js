@@ -138,6 +138,7 @@ export function when(event, timeout = 0) {
     const tid =
       timeout > 0
         ? util.timeout(timeout, () => {
+            wg.delete(fulfiller);
             reject(new Error(event + " event elapsed " + timeout));
           })
         : -2;

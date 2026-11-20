@@ -6,9 +6,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { readBounded } from "../../commons/bounded.js";
+import { validateIdentity } from "./listener-policy.js";
 import { Buffer } from "node:buffer";
 import { X509Certificate } from "node:crypto";
-import { Http2ServerRequest, Http2ServerResponse } from "node:http2";
 import * as bufutil from "../../commons/bufutil.js";
 import { decryptAesGcm, hmacsign, svckeys } from "../../commons/crypto.js";
 import * as envutil from "../../commons/envutil.js";
@@ -22,21 +23,19 @@ import { log } from "../log.js";
  * @return {[BufferSource, BufferSource]} [TLS_KEY, TLS_CRT]
  */
 export function getCertKeyFromEnv(TLS_CRT_KEY) {
-  if (TLS_CRT_KEY == null) throw new Error("TLS cert / key not found");
-
-  TLS_CRT_KEY = TLS_CRT_KEY.replace(/\\n/g, "\n");
-
-  if (TLS_CRT_KEY.split("=", 1)[0].indexOf("KEY") >= 0) {
-    return TLS_CRT_KEY.split("\n").map((v) =>
-      Buffer.from(v.substring(v.indexOf("=") + 1), "base64")
-    );
-  } else if (TLS_CRT_KEY.split("\n")[1].split("=", 1)[0].indexOf("KEY") >= 0) {
-    return TLS_CRT_KEY.split("\n")
-      .reverse()
-      .map((v) => Buffer.from(v.substring(v.indexOf("=") + 1), "base64"));
-  } else {
-    throw new Error("TLS cert / key malformed");
+  const parts = new Map();
+  for (const line of (TLS_CRT_KEY ?? "")
+    .trim()
+    .replace(/\\n/g, "\n")
+    .split(/\r?\n/)) {
+    const match = /^(KEY|CRT)=([a-zA-Z0-9+/]+={0,2})$/.exec(line);
+    if (!match || parts.has(match[1])) {
+      throw new Error("malformed TLS identity");
+    }
+    parts.set(match[1], Buffer.from(match[2], "base64"));
   }
+  if (parts.size !== 2) throw new Error("incomplete TLS identity");
+  return [parts.get("KEY"), parts.get("CRT")];
 }
 
 /**
@@ -46,10 +45,12 @@ export function getCertKeyFromEnv(TLS_CRT_KEY) {
 export async function replaceKeyCert(replacing) {
   const nokeycert = [null, null];
 
-  if (replacing == null) return nokeycert;
+  const names = replacing?.subjectAltName?.split(", ").sort();
   if (
-    replacing.subject.indexOf("rethinkdns.com") < 0 ||
-    replacing.subjectAltName.indexOf("rethinkdns.com") < 0
+    !names?.length ||
+    !names.every((n) =>
+      /^DNS:(?:\*\.)?(?:[a-z0-9-]+\.)*rethinkdns\.com$/i.test(n)
+    )
   ) {
     return nokeycert;
   }
@@ -70,6 +71,8 @@ export async function replaceKeyCert(replacing) {
     const who = envutil.hostId(); // never empty on fly
     const req = new Request(url, {
       method: "GET",
+      redirect: "error",
+      signal: AbortSignal.timeout(5000),
       headers: {
         "x-rethinkdns-xsvc-authz": bufutil.hex(authz),
         "x-rethinkdns-xsvc-who": who,
@@ -77,12 +80,15 @@ export async function replaceKeyCert(replacing) {
     });
     const r = await fetch(req);
 
-    if (!r.ok) {
-      log.e("certfile: fetch err", who, authz.length, r.status, r.statusText);
+    if (r.status !== 200) {
+      r.body?.cancel().catch(() => {});
+      log.e("certfile: fetch failed", r.status);
       return nokeycert;
     }
 
-    const crthex = await r.text();
+    const crthex = new TextDecoder().decode(
+      await readBounded(r, 65536, req.signal)
+    );
     if (util.emptyString(crthex)) {
       log.e("certfile: empty response");
       return nokeycert;
@@ -99,12 +105,10 @@ export async function replaceKeyCert(replacing) {
       return nokeycert;
     }
 
+    validateIdentity(key, cert, true);
     const latest = new X509Certificate(cert);
-    if (
-      latest.subject.indexOf("rethinkdns.com") < 0 ||
-      latest.subjectAltName.indexOf("rethinkdns.com") < 0
-    ) {
-      log.e("certfile: latest cert subject mismatch", latest.subject);
+    if (latest.subjectAltName?.split(", ").sort().join() !== names.join()) {
+      log.e("certfile: replacement SAN mismatch");
       return nokeycert;
     }
 
@@ -133,7 +137,7 @@ export async function replaceKeyCert(replacing) {
 
     return [key, cert];
   } catch (err) {
-    log.e("certfile: failed to get cert", err);
+    log.e("certfile: renewal failed");
   }
   return nokeycert;
 }
@@ -174,18 +178,6 @@ export async function decryptText(req, ivciphertaghex) {
       req.method;
     const aad = bufutil.fromStr(aadstr);
 
-    log.d(
-      "decrypt: ivciphertag",
-      ivciphertaghex.length,
-      "iv",
-      iv.length,
-      "ciphertag",
-      ciphertag.length,
-      "aad",
-      aadstr,
-      aad.length
-    );
-
     const [aeskey, mackey] = await keys();
     if (!aeskey || !mackey) {
       log.e("decrypt: key missing");
@@ -199,7 +191,7 @@ export async function decryptText(req, ivciphertaghex) {
     }
     return bufutil.toStr(plain);
   } catch (err) {
-    log.e("decrypt: failed", err);
+    log.e("decrypt: failed");
     return null;
   }
 }
@@ -209,6 +201,34 @@ export async function decryptText(req, ivciphertaghex) {
  */
 async function keys() {
   return svckeys();
+}
+
+// Use only an origin-form target. HTTP/2 permits a Host header alongside
+// :authority; if both exist they must identify the same origin.
+export function requestUrl(headers, target) {
+  const origin = (host) => {
+    if (
+      typeof host !== "string" ||
+      !host ||
+      host.length > 320 ||
+      /[\s\\/?#@%]/.test(host)
+    ) {
+      throw new Error("invalid authority");
+    }
+    return new URL("https://" + host).origin;
+  };
+  const base = origin(headers[":authority"] ?? headers.host);
+  if (
+    (headers.host != null && origin(headers.host) !== base) ||
+    !target.startsWith("/") ||
+    target.startsWith("//") ||
+    /[\\#\r\n\t]/.test(target)
+  ) {
+    throw new Error("invalid request target");
+  }
+  const url = new URL(target, base);
+  if (url.origin !== base) throw new Error("origin mismatch");
+  return url;
 }
 
 /**
@@ -236,51 +256,4 @@ export function copyNonPseudoHeaders(headers) {
   }
 
   return out;
-}
-
-/**
- * @param {Object} headers
- * @return {Object}
- */
-export function transformPseudoHeaders(headers) {
-  const out = {};
-
-  if (!headers) return out;
-
-  // transform http/2 pseudo-headers
-  for (const name in headers) {
-    if (name.startsWith(":")) {
-      out[name.slice(1)] = headers[name];
-    } else {
-      out[name] = headers[name];
-    }
-  }
-
-  return out;
-}
-
-/**
- * @param {Http2ServerRequest} req
- * @return {String}
- */
-export function req2str(req) {
-  if (!req) return "request[null]";
-  return (
-    `request[${req.method}] ${req.headers["content-type"]} ` +
-    `${req.url} from ${req.headers["user-agent"]} ` +
-    `${req.headers["content-length"]}/${req.readableLength} `
-  );
-}
-
-/**
- * @param {Http2ServerResponse} res
- * @returns {String}
- */
-export function res2str(res) {
-  if (!res) return "response[null]";
-  return (
-    `response[${res.statusCode}] ${res.getHeader("content-type")} ` +
-    `headers-sent? ${res.headersSent} write-ended? ${res.writableEnded} ` +
-    `${res.getHeader("content-length")}/${res.writableLength}`
-  );
 }

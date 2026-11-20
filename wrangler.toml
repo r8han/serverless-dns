@@ -1,25 +1,14 @@
 name = "r8hhanhasabe-pvtt-serverless-dns-gg"
 main = "./dist/worker.js"
 workers_dev = true
-# logpush job is setup to capture from envs ending: log, pro, or one
 logpush = false
-# use node_compat or custom build
-# node_compat = true
 compatibility_date = "2023-03-21"
 send_metrics = false
-# minify = false
-upload_source_maps = true
-
-
+upload_source_maps = false
 minify = true
 
-
-# uncomment to enable analytics on serverless-dns
-# this binding is not inherited by other worker-envs
-#analytics_engine_datasets = [
-#    { binding = "METRICS", dataset = "SDNS_M0" },
-#    { binding = "BL_METRICS", dataset = "SDNS_BL0" }
-#]
+[observability]
+enabled = false
 
 [build]
 command = "npm run build"
@@ -29,7 +18,7 @@ type = "ESModule"
 globs = ["**/*.js"]
 
 [vars]
-LOG_LEVEL = "debug"
+LOG_LEVEL = "info"
 WORKER_ENV = "development"
 CLOUD_PLATFORM = "cloudflare"
 
@@ -43,15 +32,13 @@ CLOUD_PLATFORM = "cloudflare"
 [env.prod]
 name = "basic-unbound"
 minify = true
-routes = [
-  "sky.rethinkdns.com/*",
-  "sky.bravedns.com/*",
-  "basic.rethinkdns.com/*",
-  "basic.bravedns.com/*",
-  "free.bravedns.com/*",
-]
+# Add custom routes only for domains you control.
+workers_dev = true
 # vars are not inherited
 # workers/platform/environment-variables#environment-variables-via-wrangler
+logpush = false
+[env.prod.observability]
+enabled = false
 [env.prod.vars]
 LOG_LEVEL = "info"
 WORKER_ENV = "production"
@@ -62,34 +49,15 @@ CLOUD_PLATFORM = "cloudflare"
 ##################
 [env.one]
 name = "dns-one"
-logpush = true
+logpush = false
 minify = true
-routes = [
-  "one.rethinkdns.com/*",
-  "one.bravedns.com/*",
-]
-analytics_engine_datasets = [
-    { binding = "METRICS", dataset = "ONE_M0" },
-    { binding = "BL_METRICS", dataset = "ONE_BL0" }
-]
+workers_dev = true
 
+[env.one.observability]
+enabled = false
 [env.one.vars]
-# just the error and request logs
-LOG_LEVEL = "logpush"
+LOG_LEVEL = "info"
 WORKER_ENV = "production"
 CLOUD_PLATFORM = "cloudflare"
-CF_LOGPUSH_R2_PATH = "qlog/"
-AUTO_RENEW_BLOCKLISTS_OLDER_THAN = "42" # weeks
-
-##################
-#-----SECRETS----#
-##################
-# only for documentation purposes
-# developers.cloudflare.com/workers/platform/environment-variables/#adding-secrets-via-wrangler
-# [secrets]
-# GW_IP4 = ""
-# GW_IP6 = ""
-# CF_ACCOUNT_ID = ""
-# CF_API_TOKEN = ""
-# CF_LOGPUSH_R2_SECRET_KEY = ""
-# CF_LOGPUSH_R2_ACCESS_KEY = ""
+# Optional tenant-scoped storage/analytics require explicit bindings, a new
+# dataset and independent collection/read grants. See docs/security/rollout.md.

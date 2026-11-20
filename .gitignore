@@ -4,22 +4,31 @@ node_modules/
 worker/
 test/data/cache/
 blocklists__/
-dbip__/
 src/basicconfig.json
 
-# lock files
-/package-lock.json
-/deno.lock
+src/blocklist-metadata.json
+src/.blocklist-metadata-*
 
-.clinic/
+*.cpuprofile
+fixture/
+/release/
 **basicconfig.json
 **filetag.json
 *.log
 *.swp
 *.bak
 
-# Local enviroment variables
+# Local environment / provider credentials
 .env
+.env.*
+.dev.vars*
+.wrangler/
+
+# Dependency resolutions are local to an install/build, not source inputs.
+package-lock.json
+bun.lock
+bun.lockb
+deno.lock
 
 # Cache
 .eslintcache

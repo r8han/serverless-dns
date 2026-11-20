@@ -11,10 +11,10 @@ kill_timeout = "15s"
 [env]
   # offload TLS on to fly-proxy;
   # tls-tls_options for [[services]] must be set
-  TLS_OFFLOAD = "true"
+  TLS_MODE = "offload"
   CLOUD_PLATFORM = "fly"
   BUN_ENV = "production"
-  DENO_ENV = "production"
+  DENO_ENV_DOMAIN = "production"
   NODE_ENV = "production"
   LOG_LEVEL = "info"
 
@@ -60,49 +60,3 @@ auto_rollback = true
     grace_period = "15s"
     # restart_limit is unused in appsv2
     restart_limit = 0
-
-# DNS over TCP/TLS
-[[services]]
-  internal_port = 10555
-  protocol = "tcp"
-  auto_stop_machines = "suspend"
-  auto_start_machines = true
-
-  [services.concurrency]
-  hard_limit = 775
-  soft_limit = 700
-  type = "connections"
-
-  [[services.ports]]
-  # TODO: ProxyProto v2
-  handlers = ["tls"]
-  port = 853
-
-  [[services.ports]]
-  # TODO: ProxyProto v2
-  handlers = ["tls"]
-  port = 10555
-
-  [[services.tcp_checks]]
-    # super aggressive interval and timeout because
-    # health-check routing is handled by fly-proxy
-    # and it is cross-region
-    # community.fly.io/t/12997
-    interval = "5s"
-    timeout = "1s"
-    grace_period = "15s"
-    # restart_limit is unused in appsv2
-    restart_limit = 0
-
-# community.fly.io/t/5490/3
-[checks]
-  [checks.up]
-    # grace_period affects time taken for rolling deploys
-    grace_period = "15s"
-    interval = "15s"
-    method = "get"
-    path = "/check"
-    port = 8888
-    timeout = "2s"
-    type = "http"
-

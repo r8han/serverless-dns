@@ -12,15 +12,13 @@ import * as util from "../commons/util.js";
 /** @typedef {import("./users/auth-token.js").Outcome} AuthOutcome */
 
 export class RResp {
-  constructor(data = null, hasex = false, exfrom = "", exstack = "") {
+  constructor(data = null, hasex = false, exfrom = "") {
     /** @type {RespData?} */
     this.data = data || new RespData();
     /** @type {boolean} */
     this.isException = hasex;
     /** @type {String} */
     this.exceptionFrom = exfrom;
-    /** @type {String} */
-    this.exceptionStack = exstack;
   }
 }
 
@@ -69,14 +67,11 @@ export function emptyResponse() {
 
 /**
  * @param {String} id
- * @param {Error} err
  * @returns {RResp}
  */
-export function errResponse(id, err) {
-  const data = null;
-  const hasex = true;
-  const st = util.emptyObj(err) || !err.stack ? "no-stacktrace" : err.stack;
-  return new RResp(data, hasex, id, st);
+export function errResponse(id) {
+  // A fixed operation label, never the exception, its URL, or its stack.
+  return new RResp(null, true, id);
 }
 
 /**
