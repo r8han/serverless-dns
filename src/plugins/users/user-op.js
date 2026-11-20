@@ -23,7 +23,13 @@ const delegated = new Set(["ipv4only.arpa"]);
 
 export class UserOp {
   constructor() {
-    this.keys = token.credentials(envManager.get("ACCESS_KEYS"));
+    this.keys = token.accessCredentials(
+      envManager.get("DNS_ACCESS_MODE"),
+      envManager.get("ACCESS_KEYS"),
+      ["WORKER_ENV", "NODE_ENV", "BUN_ENV"].some(
+        (name) => envManager.get(name) === "production"
+      )
+    );
     this.userConfigCache = new UserCache(cacheSize);
     this.log = log.withTags("UserOp");
   }

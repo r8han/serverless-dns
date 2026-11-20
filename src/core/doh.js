@@ -10,6 +10,7 @@ import { cancelScope, checkAlive, whileAlive } from "../commons/cancel.js";
 import * as dnsutil from "../commons/dnsutil.js";
 import * as util from "../commons/util.js";
 import { services } from "./svc.js";
+import { auth } from "../plugins/users/auth-token.js";
 import IOState from "./io-state.js";
 import RethinkPlugin from "./plugin.js";
 
@@ -28,6 +29,34 @@ const privateHeaders = {
   "referrer-policy": "no-referrer",
 };
 
+// Only configured principals can occupy the quota map. Keep a separate
+// small budget for checks that have not authenticated yet.
+const inFlight = new Map();
+let checking = 0;
+export async function admitPrivate(request) {
+  const keys = services.userOp?.keys;
+  if (!keys?.length || ["OPTIONS", "HEAD"].includes(request.method)) return {};
+  if (checking >= 32) return { status: 503 };
+  checking++;
+  try {
+    const result = await auth(request, keys);
+    if (!result.ok) return { status: 401 };
+    const id = result.partition || result.principal;
+    const n = inFlight.get(id) || 0;
+    if (n >= 16) return { status: 429 };
+    inFlight.set(id, n + 1);
+    return {
+      release() {
+        const left = inFlight.get(id) - 1;
+        if (left) inFlight.set(id, left);
+        else inFlight.delete(id);
+      },
+    };
+  } finally {
+    checking--;
+  }
+}
+
 export async function handleRequest(event) {
   const req = event.request;
   if (req.url.length > 8192) {
@@ -40,6 +69,14 @@ export async function handleRequest(event) {
     return new Response(null, {
       status: 204,
       headers: { ...util.corsHeaders(), ...privateHeaders },
+    });
+  }
+  const admission = event.privateAdmission || (await admitPrivate(req));
+  if (admission.status || active >= maxRequests) {
+    if (!event.privateAdmission) admission.release?.();
+    return new Response(null, {
+      status: admission.status || 503,
+      headers: privateHeaders,
     });
   }
   const wait = dnsutil.requestTimeout();
@@ -75,6 +112,7 @@ export async function handleRequest(event) {
     });
   } finally {
     active--;
+    if (!event.privateAdmission) admission.release?.();
     ctl.close();
   }
 }

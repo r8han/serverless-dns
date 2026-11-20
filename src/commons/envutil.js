@@ -136,12 +136,6 @@ export function kdfSvcSecretHex() {
   return envManager.get("KDF_SVC") || null;
 }
 
-export function isDotOverProxyProto() {
-  if (!envManager) return false;
-
-  return envManager.get("DOT_HAS_PROXY_PROTO") || false;
-}
-
 export function isCleartext() {
   if (!envManager) return false;
 
@@ -198,11 +192,7 @@ export function dohCleartextBackendPort() {
 }
 
 export function dotBackendPort() {
-  return isDotOverProxyProto() ? 10001 : 10000;
-}
-
-export function dotProxyProtoBackendPort() {
-  return isDotOverProxyProto() ? 10000 : /* random*/ 0;
+  return 10000;
 }
 
 export function httpCheckPort() {

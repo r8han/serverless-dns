@@ -65,6 +65,20 @@ export function reportQuery(dataset, tenant, params, allowCountry = false) {
 
 export class LogPusher {
   geo = new GeoIP();
+  reads = new Map();
+  writes = new Map();
+
+  take(slots, tenant, limit) {
+    const minute = Math.floor(Date.now() / 60000);
+    let slot = slots.get(tenant);
+    if (!slot || slot.minute !== minute) {
+      slot = { minute, count: 0 };
+      slots.set(tenant, slot);
+    }
+    if (slot.count >= limit) return false;
+    slot.count++;
+    return true;
+  }
 
   async writeMetric(metrics, tenant, type, result, wire, env) {
     const blobs = [type, result];
@@ -119,7 +133,12 @@ export class LogPusher {
         ).catch(() => {})
       );
     }
-    if (env.get("LOGPUSH_HISTORY") && bindings?.DNS_HISTORY) {
+    if (
+      env.get("LOGPUSH_HISTORY") &&
+      env.get("DNS_HISTORY_LIFECYCLE_READY") &&
+      bindings?.DNS_HISTORY &&
+      this.take(this.writes, tenant, 60)
+    ) {
       const data = JSON.stringify({ tenant, time, type, result });
       ctx.dispatcher(
         bindings.DNS_HISTORY.put(
@@ -147,6 +166,7 @@ export class LogPusher {
     if (url.pathname !== "/" + command) return deny(400);
     const p = url.searchParams;
     const tenant = auth.partition;
+    if (!this.take(this.reads, tenant, 12)) return deny(429);
     const scope = cancelScope([signal], 4000);
     signal = scope.signal;
     try {

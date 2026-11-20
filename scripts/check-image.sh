@@ -11,7 +11,7 @@ trap 'docker rm -f "$name" >/dev/null 2>&1 || :' EXIT
 # were usable without downloading, repairing or populating a writable cache.
 docker run -d --name "$name" --network none --read-only --tmpfs /tmp:rw,nosuid,nodev \
   --cap-drop ALL --security-opt no-new-privileges -e CLOUD_PLATFORM=standalone \
-  -e DISABLE_BLOCKLISTS=false -e TLS_MODE=offload -e OFFLOAD_BIND=127.0.0.1 "$image"
+  -e DISABLE_BLOCKLISTS=false -e DNS_ACCESS_MODE=public -e TLS_MODE=offload -e OFFLOAD_BIND=127.0.0.1 "$image"
 docker exec "$name" sh -ec '
   test "$(id -u)" != 0
   test ! -w /app
@@ -19,6 +19,9 @@ docker exec "$name" sh -ec '
   unexpected=$(find /app \( -type l -o -name node_modules -o -name .git -o -name ".env*" -o -name ".dev.vars*" -o -name .npmrc -o -name "*.key" -o -name "*.pem" \) -print -quit)
   test -z "$unexpected"
 '
+if [ "$runtime" = node ]; then
+  test "$(docker exec "$name" node --version)" = "v$(cat .node-version)"
+fi
 case "$runtime" in node|bun) set -- "$runtime" -e;; *) exit 2;; esac
 # dntouint requires an installed filter and performs a trie lookup; it does
 # not forward DNS or need to know which names the production policy blocks.

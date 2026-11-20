@@ -13,3 +13,5 @@
 !LICENSE
 !package.json
 !webpack.node.cjs
+!package-lock.json
+!.node-version

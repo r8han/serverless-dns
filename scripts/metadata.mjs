@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   fetchArtifact,
+  checkWorkerBlocklistBudget,
   jsonBytes,
   maxJson,
   validateConfig,
@@ -146,8 +147,12 @@ if (
     manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   } catch {
     throw new Error(
-      "A trusted local BLOCKLIST_MANIFEST is required (see docs/security/rollout.md)."
+      "A trusted local BLOCKLIST_MANIFEST is required (see config/README.md)."
     );
+  }
+  if (process.argv.includes("--worker")) {
+    validateManifest(manifest, version);
+    checkWorkerBlocklistBudget(manifest);
   }
   const base =
     process.env.BLOCKLIST_BASE_URL ||

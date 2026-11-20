@@ -32,6 +32,12 @@ export function validateManifest(m, version) {
     }
   }
 }
+export function checkWorkerBlocklistBudget(manifest) {
+  const total = manifest.files["td.txt"].size + manifest.files["rd.txt"].size;
+  if (total > 48 * 1024 * 1024) {
+    throw new Error("Worker blocklist budget exceeded");
+  }
+}
 export async function digest(bytes) {
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return Array.from(hash, (x) => x.toString(16).padStart(2, "0")).join("");
