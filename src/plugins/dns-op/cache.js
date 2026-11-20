@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 import { LfuCache } from "@serverless-dns/lfu-cache";
+import * as dnsutil from "../../commons/dnsutil.js";
 import * as env from "../../commons/envutil.js";
 import { openResponse } from "../../commons/cancel.js";
 import { readBounded } from "../../commons/bounded.js";
 import { UpstreamAnswer, lifetime, replay } from "../cache-util.js";
+import { AnswerCache } from "./answer-cache.js";
 import { CacheApi } from "./cache-api.js";
 
 export class DnsCache {
-  constructor(size) {
+  constructor(size, bytes = dnsutil.cacheBytes()) {
     this.disabled = env.disableDnsCache();
-    this.answers = new LfuCache("answers-v2", size);
+    // Answers carry up to a full DNS packet each, so they are bounded by
+    // bytes as well as entries. Policy entries are per-question stamps and
+    // are small enough for the entry cap to bound them.
+    this.answers = new AnswerCache(size, bytes);
     this.policy = new LfuCache("policy-v2", size);
     this.http = new CacheApi();
   }

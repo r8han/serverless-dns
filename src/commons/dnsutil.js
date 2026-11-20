@@ -21,12 +21,20 @@ export const minDNSPacketSize = dnsPacketHeaderSize + 5;
 export const maxDNSPacketSize = 4096;
 
 const _dnsCacheSize = 30000;
+// Retained memory for cached upstream answers. A cached answer may be a full
+// DNS packet (maxDNSPacketSize), so the entry cap alone does not bound memory;
+// see docs/security/2026-11-20/audit.md (MEM-01).
+const _dnsCacheBytes = 16 * 1024 * 1024; // 16 MiB
 
 const _minRequestTimeout = 4000; // 4s
 const _maxRequestTimeout = 30000; // 30s
 
 export function cacheSize() {
   return _dnsCacheSize;
+}
+
+export function cacheBytes() {
+  return _dnsCacheBytes;
 }
 
 export function isAnswer(packet) {

@@ -11,7 +11,6 @@
 import { listener, identity } from "./core/node/config.js";
 
 import { LfuCache } from "@serverless-dns/lfu-cache";
-import * as h2c from "httpx-server";
 import { randomBytes, X509Certificate } from "node:crypto";
 import http2 from "node:http2";
 import https from "node:https";
@@ -31,6 +30,7 @@ import { handleRequest } from "./core/doh.js";
 import { log as log2, loggerWithTags } from "./core/log.js";
 import http from "node:http";
 import { readFrame } from "./commons/dns-frame.js";
+import { createServer as createCleartextServer } from "./core/node/cleartext-http.js";
 import * as nodeutil from "./core/node/util.js";
 import * as psk from "./core/psk.js";
 import { stopAfter, uptime } from "./core/svc.js";
@@ -362,12 +362,13 @@ function systemUp() {
     // Ref (for servers): github.com/nodejs/node/issues/34296
     // Ref (for clients): github.com/nodejs/node/issues/31759
     // Impl: stackoverflow.com/a/42019773
-    const dohct = (isBun ? http : h2c)
-      .createServer(serverOpts, serveHTTPS)
-      .listen(dohOpts, () => {
-        up("DoH Cleartext", dohct.address());
-        trapServerEvents("dohct", dohct);
-      });
+    // The selection is on the RFC 9113 connection preface (cleartext-http.js),
+    // not on the string "HTTP/2.0" appearing in the first write.
+    const mkcleartext = isBun ? http.createServer : createCleartextServer;
+    const dohct = mkcleartext(serverOpts, serveHTTPS).listen(dohOpts, () => {
+      up("DoH Cleartext", dohct.address());
+      trapServerEvents("dohct", dohct);
+    });
   } else {
     // terminate tls ourselves
     /** @type {tls.TlsOptions} */
